@@ -5,3 +5,5 @@ letsencrypt/
 dumps/
 ssb/
 **/bmc_credentials.json
+.github/
+product_requirements.md

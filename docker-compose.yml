@@ -43,13 +43,28 @@ services:
   celery:
     container_name: celery
     build: ./celery
-    command: celery -A celery_app worker -B --loglevel=INFO
+    command: ["celery", "-A", "celery_app", "worker", "-B", "--loglevel=INFO"]
     env_file:
       - ./celery/.env
     volumes:
       - ./celery/bmc_credentials.json:/app/bmc_credentials.json:ro
+      - metrics_dir:/metrics
     depends_on:
       - redis
+
+  celery-metrics:
+    container_name: celery-metrics
+    build: ./celery
+    command: ["/usr/local/bin/entrypoint.sh", "metrics-server"]
+    env_file:
+      - ./celery/.env
+    environment:
+      - PROMETHEUS_MULTIPROC_DIR=/metrics
+      - WORKER_METRICS_PORT=9200
+    volumes:
+      - metrics_dir:/metrics
+    ports:
+      - "9200:9200"
 
   frontend:
     container_name: frontend

@@ -36,3 +36,9 @@ app.conf.beat_schedule = {
         "schedule": timedelta(minutes=5),  # Run every 5 minutes for system temps
     },
 }
+
+
+# Metrics server: we no longer start a Prometheus HTTP server in each worker process
+# because Celery uses prefork workers and starting a server per child causes
+# address-in-use errors. A single dedicated metrics server aggregates metrics
+# in multiprocessing mode via PROMETHEUS_MULTIPROC_DIR. See `celery/metrics_server.py`.

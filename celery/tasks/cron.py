@@ -19,6 +19,9 @@ import urllib3
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Prometheus metrics (gauges) for workers
+from utils.metrics import POWER_GAUGE, TEMP_GAUGE
+
 # Import SystemTemperature model with error handling
 try:
     from utils.models.system_temperature import SystemTemperature
@@ -764,6 +767,14 @@ def fetch_power_data():
                     "updated": created_time,
                 }
             )
+            # update prometheus gauge in worker
+            try:
+                site = power_data.get("site", "unknown")
+                rack = power_data.get("location", "unknown")
+                sensor = power_data.get("pdu_hostname", "unknown")
+                POWER_GAUGE.labels(site=site, rack=rack, sensor=sensor).set(float(power_data.get("reading", 0)))
+            except Exception as e:
+                print(f"Failed to update POWER_GAUGE: {e}")
 
         print("Power data fetched and stored successfully into DB")
     except Exception as e:
@@ -842,6 +853,13 @@ def fetch_temperature_data():
                     "updated": created_time,
                 }
             )
+            # update prometheus gauge in worker
+            try:
+                site = temperature_data.get("site", "unknown")
+                sensor = temperature_data.get("pdu_hostname", temperature_data.get("location", "unknown"))
+                TEMP_GAUGE.labels(site=site, sensor=sensor).set(float(temperature_data.get("reading", 0)))
+            except Exception as e:
+                print(f"Failed to update TEMP_GAUGE: {e}")
 
         print("Temperature data fetched and stored successfully into DB")
     except Exception as e:

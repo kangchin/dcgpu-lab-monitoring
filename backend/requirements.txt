@@ -4,3 +4,4 @@ pymongo
 python-dotenv
 python-dateutil
 redis
+prometheus_client
