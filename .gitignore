@@ -7,3 +7,7 @@ ssb/
 **/bmc_credentials.json
 **/monthly_power_data.json
 **/power_capacity_data.json
+.github/
+product_requirements.md
+test_script.py
+

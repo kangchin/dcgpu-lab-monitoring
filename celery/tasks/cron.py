@@ -12,6 +12,7 @@ from utils.models.pdu import PDU
 from utils.models.power import Power
 from utils.models.temperature import Temperature
 from utils.models.systems import Systems
+from utils.metrics import SYSTEM_GPU_TEMP_GAUGE
 from puresnmp import Client, V2C, ObjectIdentifier as OID
 from dotenv import load_dotenv
 import urllib3
@@ -922,6 +923,24 @@ def fetch_system_temperature_data():
                 gpu_temperatures = fetch_gpu_temperatures_redfish(bmc_ip, username, password, system_type)
 
             if gpu_temperatures is not None:
+                # Update Prometheus metrics for each GPU
+                metrics_recorded = 0
+                if SYSTEM_GPU_TEMP_GAUGE:
+                    for gpu_idx, temp in enumerate(gpu_temperatures):
+                        if temp is not None:
+                            try:
+                                SYSTEM_GPU_TEMP_GAUGE.labels(
+                                    system=system_name,
+                                    gpu=str(gpu_idx)
+                                ).set(temp)
+                                metrics_recorded += 1
+                            except Exception as e:
+                                print(f"[METRICS] Failed to record metric for {system_name} GPU {gpu_idx}: {e}")
+                    
+                    print(f"[METRICS] Recorded {metrics_recorded} GPU temperature metrics for {system_name}")
+                else:
+                    print(f"[METRICS] SYSTEM_GPU_TEMP_GAUGE not available, skipping metric recording")
+                
                 # Create temperature record with GPU array
                 temp_data = {
                     "system": system_name,
