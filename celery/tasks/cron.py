@@ -12,7 +12,7 @@ from utils.models.pdu import PDU
 from utils.models.power import Power
 from utils.models.temperature import Temperature
 from utils.models.systems import Systems
-from utils.metrics import SYSTEM_GPU_TEMP_GAUGE
+from utils.metrics import SYSTEM_GPU_TEMP_GAUGE, POWER_GAUGE, TEMP_GAUGE
 from puresnmp import Client, V2C, ObjectIdentifier as OID
 from dotenv import load_dotenv
 import urllib3
@@ -757,7 +757,21 @@ def fetch_power_data():
 
         # upload to DB
         power = Power()
+        metrics_recorded = 0
         for power_data in power_list:
+            # Record Prometheus metric BEFORE database insertion
+            if POWER_GAUGE:
+                try:
+                    POWER_GAUGE.labels(
+                        site=power_data.get("site", "unknown"),
+                        rack=power_data.get("location", "unknown"),
+                        sensor=power_data.get("pdu_hostname", "unknown")
+                    ).set(power_data.get("reading", 0))
+                    metrics_recorded += 1
+                except Exception as e:
+                    print(f"[METRICS] Failed to record power metric for {power_data.get('pdu_hostname')}: {e}")
+            
+            # Insert to database
             power.create(
                 {
                     **power_data,
@@ -765,7 +779,10 @@ def fetch_power_data():
                     "updated": created_time,
                 }
             )
-
+        
+        if POWER_GAUGE and metrics_recorded > 0:
+            print(f"[METRICS] Recorded {metrics_recorded} power metrics")
+        
         print("Power data fetched and stored successfully into DB")
     except Exception as e:
         print(f"Error fetching power data: {e}")
@@ -835,7 +852,20 @@ def fetch_temperature_data():
 
         # upload to DB
         temperature = Temperature()
+        metrics_recorded = 0
         for temperature_data in temperature_list:
+            # Record Prometheus metric BEFORE database insertion
+            if TEMP_GAUGE:
+                try:
+                    TEMP_GAUGE.labels(
+                        site=temperature_data.get("site", "unknown"),
+                        sensor=temperature_data.get("location", "unknown")
+                    ).set(temperature_data.get("reading", 0))
+                    metrics_recorded += 1
+                except Exception as e:
+                    print(f"[METRICS] Failed to record temperature metric for {temperature_data.get('pdu_hostname')}: {e}")
+            
+            # Insert to database
             temperature.create(
                 {
                     **temperature_data,
@@ -843,7 +873,10 @@ def fetch_temperature_data():
                     "updated": created_time,
                 }
             )
-
+        
+        if TEMP_GAUGE and metrics_recorded > 0:
+            print(f"[METRICS] Recorded {metrics_recorded} temperature metrics")
+        
         print("Temperature data fetched and stored successfully into DB")
     except Exception as e:
         print(f"Error fetching temperature data: {e}")
