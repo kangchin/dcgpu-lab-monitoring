@@ -10,12 +10,14 @@ if Gauge:
         "lab_power_watts",
         "Power reading in watts",
         ["site", "rack", "sensor"],
+        multiprocess_mode='mostrecent'
     )
 
     TEMP_GAUGE = Gauge(
         "lab_temperature_celsius",
-        "Temperature reading in celsius",
+        "Lab temperature reading in celsius",
         ["site", "sensor"],
+        multiprocess_mode='mostrecent'
     )
 
     SYSTEM_GPU_TEMP_GAUGE = Gauge(
