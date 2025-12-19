@@ -1085,6 +1085,10 @@ def fetch_fan_speed_via_ipmi(bmc_ip: str, username: str, password: str):
                     parts = [p.strip() for p in line.split('|')]
                     if len(parts) >= 2:
                         fan_name = parts[0].strip()
+                        # Remove "RPM" suffix from fan name if present
+                        if fan_name.endswith(' RPM'):
+                            fan_name = fan_name[:-4].strip()
+                        
                         rpm_str = parts[1].strip()
                         
                         # Extract numeric RPM value
