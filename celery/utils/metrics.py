@@ -26,8 +26,15 @@ if Gauge:
         ["system", "gpu"],
         multiprocess_mode='mostrecent'
     )
+
+    SYSTEM_FAN_SPEED = Gauge(
+        "system_fan_speed_rpm",
+        "Fan speed in RPM per system",
+        ["system", "fan"],
+        multiprocess_mode='mostrecent'
+    )
 else:
-    POWER_GAUGE = TEMP_GAUGE = SYSTEM_GPU_TEMP_GAUGE = None
+    POWER_GAUGE = TEMP_GAUGE = SYSTEM_GPU_TEMP_GAUGE = SYSTEM_FAN_SPEED = None
 
 # HTTP metrics
 if Counter:

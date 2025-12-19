@@ -12,7 +12,7 @@ from utils.models.pdu import PDU
 from utils.models.power import Power
 from utils.models.temperature import Temperature
 from utils.models.systems import Systems
-from utils.metrics import SYSTEM_GPU_TEMP_GAUGE, POWER_GAUGE, TEMP_GAUGE
+from utils.metrics import SYSTEM_GPU_TEMP_GAUGE, POWER_GAUGE, TEMP_GAUGE, SYSTEM_FAN_SPEED
 from puresnmp import Client, V2C, ObjectIdentifier as OID
 from dotenv import load_dotenv
 import urllib3
@@ -1034,6 +1034,147 @@ def fetch_system_temperature_data():
 
     except Exception as e:
         print(f"Error in fetch_system_temperature_data: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+
+
+def fetch_fan_speed_via_ipmi(bmc_ip: str, username: str, password: str):
+    """
+    Fetch fan speed data using ipmitool sdr command.
+    Returns a list of dictionaries with fan name and RPM speed.
+    Example: [{"fan": "Fan_SYS1_1", "rpm": 9600}, {"fan": "Fan_SYS1_2", "rpm": 9400}]
+    """
+    try:
+        import subprocess
+        
+        # Build ipmitool command
+        cmd = [
+            "ipmitool",
+            "-I", "lan",
+            "-U", username,
+            "-P", password,
+            "-H", bmc_ip,
+            "sdr"
+        ]
+        
+        print(f"Running ipmitool command for BMC: {bmc_ip}")
+        
+        # Execute command with timeout
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            print(f"ipmitool command failed for {bmc_ip}: {result.stderr}")
+            return None
+        
+        raw_output = result.stdout
+        print(f"ipmitool output length: {len(raw_output)} characters")
+        
+        # Parse output for fan metrics
+        fan_data = []
+        for line in raw_output.split('\n'):
+            # Look for lines containing "RPM"
+            if 'RPM' in line:
+                try:
+                    # Example line: "Fan_SYS1_1       | 9600 RPM          | ok"
+                    parts = [p.strip() for p in line.split('|')]
+                    if len(parts) >= 2:
+                        fan_name = parts[0].strip()
+                        rpm_str = parts[1].strip()
+                        
+                        # Extract numeric RPM value
+                        rpm_match = rpm_str.split()[0]  # Get first token (the number)
+                        rpm_value = int(rpm_match)
+                        
+                        fan_data.append({
+                            "fan": fan_name,
+                            "rpm": rpm_value
+                        })
+                        print(f"Parsed: {fan_name} = {rpm_value} RPM")
+                        
+                except (ValueError, IndexError) as e:
+                    print(f"Failed to parse fan line: {line}, error: {e}")
+                    continue
+        
+        print(f"Successfully parsed {len(fan_data)} fan metrics from {bmc_ip}")
+        return fan_data if fan_data else None
+        
+    except subprocess.TimeoutExpired:
+        print(f"ipmitool command timed out for {bmc_ip}")
+        return None
+    except FileNotFoundError:
+        print("ipmitool command not found. Please install ipmitool package.")
+        return None
+    except Exception as e:
+        print(f"Error fetching fan speed for {bmc_ip}: {e}")
+        return None
+
+
+@shared_task
+def fetch_system_fan_speed_data():
+    """
+    Fetch system fan speed data using ipmitool for all systems.
+    Exposes metrics via SYSTEM_FAN_SPEED gauge to Prometheus.
+    """
+    try:
+        # Parse BMC credentials (reuse existing method)
+        print("Fetching BMC credentials...")
+        bmc_credentials = parse_bmc_credentials()
+        
+        if not bmc_credentials:
+            print("No valid BMC credentials found")
+            return
+        
+        print(f"Found {len(bmc_credentials)} systems with BMC credentials")
+        
+        matched_systems = 0
+        total_fans_recorded = 0
+        
+        # Process each system with credentials
+        for system_name, credentials in bmc_credentials.items():
+            matched_systems += 1
+            bmc_ip = credentials["bmc_ip"]
+            username = credentials["username"]
+            password = credentials["password"]
+            
+            print(f"Processing system: {system_name} (BMC: {bmc_ip})")
+            
+            # Fetch fan speed data via ipmitool
+            fan_data_list = fetch_fan_speed_via_ipmi(bmc_ip, username, password)
+            
+            if fan_data_list:
+                # Record Prometheus metrics
+                metrics_recorded = 0
+                if SYSTEM_FAN_SPEED:
+                    for fan_data in fan_data_list:
+                        try:
+                            SYSTEM_FAN_SPEED.labels(
+                                system=system_name,
+                                fan=fan_data["fan"]
+                            ).set(fan_data["rpm"])
+                            metrics_recorded += 1
+                        except Exception as e:
+                            print(f"[METRICS] Failed to record fan metric for {system_name}/{fan_data['fan']}: {e}")
+                    
+                    print(f"[METRICS] Recorded {metrics_recorded} fan speed metrics for {system_name}")
+                    total_fans_recorded += metrics_recorded
+                else:
+                    print(f"[METRICS] SYSTEM_FAN_SPEED gauge not available, skipping metric recording")
+                
+                print(f"Successfully collected fan speeds for {system_name}: {len(fan_data_list)} fans")
+            else:
+                print(f"Failed to collect fan speeds for {system_name} (BMC: {bmc_ip})")
+        
+        print(f"Processed {matched_systems} systems with BMC credentials")
+        print(f"Total fan metrics recorded: {total_fans_recorded}")
+        
+    except Exception as e:
+        print(f"Error in fetch_system_fan_speed_data: {e}")
         import traceback
         traceback.print_exc()
         return
