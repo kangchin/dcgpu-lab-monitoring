@@ -1119,13 +1119,109 @@ def fetch_fan_speed_via_ipmi(bmc_ip: str, username: str, password: str):
         return None
 
 
+def process_systems_batch_parallel(systems_dict, batch_name="", max_workers=10):
+    """
+    Process a batch of systems in parallel using ThreadPoolExecutor.
+    
+    Args:
+        systems_dict: Dictionary of {system_name: credentials}
+        batch_name: Optional name for logging
+        max_workers: Maximum number of parallel workers (default: 10)
+    
+    Returns:
+        tuple: (total_fans_recorded, successful_systems, failed_systems)
+        Returns None if systems_dict is empty (no work to do)
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    if not systems_dict:
+        print(f"[{batch_name}] No systems to process (empty batch)")
+        return None  # Distinguish from "0 fans found"
+    
+    print(f"[{batch_name}] Processing {len(systems_dict)} systems with {max_workers} parallel workers...")
+    
+    total_fans_recorded = 0
+    successful_systems = 0
+    failed_systems = 0
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_system = {
+            executor.submit(
+                fetch_fan_speed_via_ipmi,
+                creds["bmc_ip"],
+                creds["username"],
+                creds["password"]
+            ): (system_name, creds["bmc_ip"])
+            for system_name, creds in systems_dict.items()
+        }
+        
+        # Collect results as they complete
+        for future in as_completed(future_to_system):
+            system_name, bmc_ip = future_to_system[future]
+            try:
+                fan_data_list = future.result(timeout=35)  # Slightly longer than ipmitool timeout
+                
+                if fan_data_list:
+                    # Record Prometheus metrics
+                    metrics_recorded = 0
+                    if SYSTEM_FAN_SPEED:
+                        for fan_data in fan_data_list:
+                            try:
+                                SYSTEM_FAN_SPEED.labels(
+                                    system=system_name,
+                                    fan=fan_data["fan"]
+                                ).set(fan_data["rpm"])
+                                metrics_recorded += 1
+                            except Exception as e:
+                                print(f"[{batch_name}] [METRICS] Failed to record fan metric for {system_name}/{fan_data['fan']}: {e}")
+                        
+                        total_fans_recorded += metrics_recorded
+                        successful_systems += 1
+                        print(f"[{batch_name}] ✓ {system_name}: Recorded {metrics_recorded} fan metrics")
+                    else:
+                        print(f"[{batch_name}] SYSTEM_FAN_SPEED gauge not available")
+                else:
+                    # System responded but no fans found (could be normal or error)
+                    successful_systems += 1  # Mark as successful (BMC responded)
+                    print(f"[{batch_name}] ⚠ {system_name} (BMC: {bmc_ip}): No fan data in response (0 RPM or no fans detected)")
+                        
+            except TimeoutError:
+                failed_systems += 1
+                print(f"[{batch_name}] ✗ {system_name} (BMC: {bmc_ip}): Timeout after 35 seconds")
+            except Exception as e:
+                failed_systems += 1
+                print(f"[{batch_name}] ✗ {system_name} (BMC: {bmc_ip}): Error - {e}")
+    
+    print(f"[{batch_name}] Batch complete: {successful_systems} succeeded, {failed_systems} failed, {total_fans_recorded} total fans")
+    return total_fans_recorded, successful_systems, failed_systems
+
+
 @shared_task
-def fetch_system_fan_speed_data():
+def fetch_system_fan_speed_data(batch_start=None, batch_end=None):
     """
     Fetch system fan speed data using ipmitool for all systems.
     Exposes metrics via SYSTEM_FAN_SPEED gauge to Prometheus.
+    
+    Args:
+        batch_start: Starting index for batch processing (optional)
+        batch_end: Ending index for batch processing (optional)
+    
+    Environment Variables:
+        FAN_SPEED_MAX_WORKERS: Maximum parallel workers (default: 10)
+        FAN_SPEED_BATCH_SIZE: Systems per batch for auto-batching (default: 33)
     """
+    import time
+    
     try:
+        start_time = time.time()
+        
+        # Read configuration from environment
+        max_workers = int(os.environ.get("FAN_SPEED_MAX_WORKERS", "10"))
+        batch_size = int(os.environ.get("FAN_SPEED_BATCH_SIZE", "33"))
+        
+        print(f"Configuration: max_workers={max_workers}, batch_size={batch_size}")
+        
         # Parse BMC credentials (reuse existing method)
         print("Fetching BMC credentials...")
         bmc_credentials = parse_bmc_credentials()
@@ -1136,46 +1232,67 @@ def fetch_system_fan_speed_data():
         
         print(f"Found {len(bmc_credentials)} systems with BMC credentials")
         
-        matched_systems = 0
+        # Convert to list for batching
+        all_systems = list(bmc_credentials.items())
+        
+        # Determine batch size
+        if batch_start is not None and batch_end is not None:
+            # Explicit batch range provided
+            systems_to_process = dict(all_systems[batch_start:batch_end])
+            batch_name = f"Batch {batch_start}-{batch_end}"
+            
+            result = process_systems_batch_parallel(systems_to_process, batch_name, max_workers)
+            
+            if result is None:
+                print(f"{batch_name} was empty, no systems processed")
+                return
+            
+            fans, success, failed = result
+            elapsed_time = time.time() - start_time
+            print(f"\n{batch_name} execution time: {elapsed_time:.2f} seconds")
+            return
+        
+        # Auto-batching mode
+        total_batches = (len(all_systems) + batch_size - 1) // batch_size
+        
+        print(f"Auto-batching enabled: {total_batches} batches of ~{batch_size} systems each")
+        
         total_fans_recorded = 0
+        total_successful = 0
+        total_failed = 0
         
-        # Process each system with credentials
-        for system_name, credentials in bmc_credentials.items():
-            matched_systems += 1
-            bmc_ip = credentials["bmc_ip"]
-            username = credentials["username"]
-            password = credentials["password"]
+        for batch_num in range(total_batches):
+            batch_start_idx = batch_num * batch_size
+            batch_end_idx = min((batch_num + 1) * batch_size, len(all_systems))
+            systems_batch = dict(all_systems[batch_start_idx:batch_end_idx])
+            batch_name = f"Batch {batch_num + 1}/{total_batches}"
             
-            print(f"Processing system: {system_name} (BMC: {bmc_ip})")
+            print(f"\n{'='*60}")
+            print(f"Starting {batch_name} (systems {batch_start_idx}-{batch_end_idx-1})")
+            print(f"{'='*60}")
             
-            # Fetch fan speed data via ipmitool
-            fan_data_list = fetch_fan_speed_via_ipmi(bmc_ip, username, password)
+            result = process_systems_batch_parallel(systems_batch, batch_name, max_workers)
             
-            if fan_data_list:
-                # Record Prometheus metrics
-                metrics_recorded = 0
-                if SYSTEM_FAN_SPEED:
-                    for fan_data in fan_data_list:
-                        try:
-                            SYSTEM_FAN_SPEED.labels(
-                                system=system_name,
-                                fan=fan_data["fan"]
-                            ).set(fan_data["rpm"])
-                            metrics_recorded += 1
-                        except Exception as e:
-                            print(f"[METRICS] Failed to record fan metric for {system_name}/{fan_data['fan']}: {e}")
-                    
-                    print(f"[METRICS] Recorded {metrics_recorded} fan speed metrics for {system_name}")
-                    total_fans_recorded += metrics_recorded
-                else:
-                    print(f"[METRICS] SYSTEM_FAN_SPEED gauge not available, skipping metric recording")
-                
-                print(f"Successfully collected fan speeds for {system_name}: {len(fan_data_list)} fans")
-            else:
-                print(f"Failed to collect fan speeds for {system_name} (BMC: {bmc_ip})")
+            if result is None:
+                print(f"{batch_name} was empty, skipping")
+                continue
+            
+            fans, success, failed = result
+            total_fans_recorded += fans
+            total_successful += success
+            total_failed += failed
         
-        print(f"Processed {matched_systems} systems with BMC credentials")
+        elapsed_time = time.time() - start_time
+        print(f"\n{'='*60}")
+        print(f"FINAL SUMMARY")
+        print(f"{'='*60}")
+        print(f"Total systems processed: {len(all_systems)}")
+        print(f"Total successful: {total_successful}")
+        print(f"Total failed: {total_failed}")
         print(f"Total fan metrics recorded: {total_fans_recorded}")
+        print(f"Average fans per system: {total_fans_recorded / total_successful if total_successful > 0 else 0:.1f}")
+        print(f"Total execution time: {elapsed_time:.2f} seconds")
+        print(f"{'='*60}")
         
     except Exception as e:
         print(f"Error in fetch_system_fan_speed_data: {e}")
