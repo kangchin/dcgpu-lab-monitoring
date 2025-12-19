@@ -37,6 +37,6 @@ app.conf.beat_schedule = {
     },
     "fetch_system_fan_speed": {
         "task": "tasks.cron.fetch_system_fan_speed_data",
-        "schedule": timedelta(minutes=5),  # Run every 5 minutes
+        "schedule": timedelta(minutes=15),  # Run every 15 minutes
     },
 }
