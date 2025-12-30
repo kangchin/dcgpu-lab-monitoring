@@ -35,14 +35,10 @@ app.conf.beat_schedule = {
         "task": "tasks.cron.fetch_temperature_data",
         "schedule": timedelta(minutes=10),
     },
-    # Normal systems: every 5 minutes
-    "fetch_normal_system_temperature": {
-        "task": "tasks.cron.fetch_normal_system_temperature_data",
-        "schedule": timedelta(minutes=5),
-    },
-    # Critical systems: every 30 seconds
-    "fetch_critical_system_temperature": {
-        "task": "tasks.cron.fetch_critical_system_temperature_data",
-        "schedule": timedelta(seconds=30),
+    # Run every 30 seconds to catch critical systems quickly
+    # The task itself will determine which systems to check based on their status
+    "fetch_system_temperature": {
+        "task": "tasks.cron.fetch_system_temperature_data",
+        "schedule": timedelta(seconds=30),  # Changed from 5 minutes to 30 seconds
     },
 }
