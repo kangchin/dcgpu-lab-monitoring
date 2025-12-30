@@ -28,6 +28,7 @@ from utils.models.systems import Systems
 from puresnmp import Client, V2C, ObjectIdentifier as OID
 from dotenv import load_dotenv
 import urllib3
+import asyncio
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -49,7 +50,8 @@ load_dotenv()
 MIN_VALID_TEMP = 20.0
 MAX_VALID_TEMP = 100.0
 MAX_RETRY_ATTEMPTS = 3
-RETRY_DELAY_SECONDS = 30
+MAX_CONCURRENT_SYSTEMS = 10  # Adjust based on network capacity
+RETRY_DELAY_SECONDS = 5      # Reduced from 30 seconds
 
 # ============================================================================
 # CRITICAL TEMPERATURE MONITORING CONSTANTS
@@ -265,39 +267,40 @@ def validate_gpu_temperatures(gpu_temps):
     return True, "Valid"
 
 
-def fetch_gpu_temperatures_with_retry(system_name, bmc_ip, username, password, system_type):
+async def fetch_gpu_temperatures_with_retry_async(system_name, bmc_ip, username, password, system_type):
     """
-    Fetch GPU temperatures with retry logic.
+    NON-BLOCKING retry logic using asyncio.sleep
     
-    Retries up to MAX_RETRY_ATTEMPTS times if:
-    - Temperature is > 100°C
-    - Temperature is < 20°C  
-    - Temperature is None/NA
-    
-    Args:
-        system_name: Name of the system
-        bmc_ip: BMC IP address or rack manager IP
-        username: Authentication username
-        password: Authentication password
-        system_type: Type of system (smci, miramar, gbt, quanta, banff, dell, gt)
-    
-    Returns:
-        tuple: (gpu_temperatures, attempt_count, validation_messages)
+    OLD: time.sleep(30) - BLOCKED entire worker for 30 seconds per retry
+    NEW: await asyncio.sleep(5) - Worker can process other systems while waiting
     """
     validation_messages = []
     
     for attempt in range(1, MAX_RETRY_ATTEMPTS + 1):
-        print(f"[RETRY] Attempt {attempt}/{MAX_RETRY_ATTEMPTS} for {system_name} (BMC: {bmc_ip})")
+        print(f"[RETRY] Attempt {attempt}/{MAX_RETRY_ATTEMPTS} for {system_name}")
         
-        # Fetch temperatures based on system type
+        # Run blocking I/O in thread pool (non-blocking)
+        loop = asyncio.get_event_loop()
+        
         if system_type == "banff":
-            gpu_temps = fetch_gpu_temperatures_banff_ssh(bmc_ip, username, password, system_name)
+            gpu_temps = await loop.run_in_executor(
+                None,  # Uses default ThreadPoolExecutor
+                fetch_gpu_temperatures_banff_ssh, 
+                bmc_ip, username, password, system_name
+            )
         elif system_type == "dell":
-            gpu_temps = fetch_gpu_temperatures_dell_ssh(bmc_ip, username, password, system_name)
+            gpu_temps = await loop.run_in_executor(
+                None,
+                fetch_gpu_temperatures_dell_ssh,
+                bmc_ip, username, password, system_name
+            )
         else:
-            gpu_temps = fetch_gpu_temperatures_redfish(bmc_ip, username, password, system_type)
+            gpu_temps = await loop.run_in_executor(
+                None,
+                fetch_gpu_temperatures_redfish,
+                bmc_ip, username, password, system_type
+            )
         
-        # Validate the temperatures
         is_valid, reason = validate_gpu_temperatures(gpu_temps)
         
         validation_msg = f"Attempt {attempt}: {reason}"
@@ -305,24 +308,172 @@ def fetch_gpu_temperatures_with_retry(system_name, bmc_ip, username, password, s
         print(f"[RETRY] {system_name} - {validation_msg}")
         
         if is_valid:
-            print(f"[RETRY] {system_name} - Valid temperatures obtained on attempt {attempt}")
+            print(f"[RETRY] {system_name} - Valid on attempt {attempt}")
             return gpu_temps, attempt, validation_messages
         
-        # If not valid and we have more attempts, wait before retrying
+        # NON-BLOCKING wait (was time.sleep)
         if attempt < MAX_RETRY_ATTEMPTS:
-            print(f"[RETRY] {system_name} - Waiting {RETRY_DELAY_SECONDS} seconds before retry...")
-            time.sleep(RETRY_DELAY_SECONDS)
+            print(f"[RETRY] {system_name} - Waiting {RETRY_DELAY_SECONDS}s (NON-BLOCKING)...")
+            await asyncio.sleep(RETRY_DELAY_SECONDS)  
         else:
-            print(f"[RETRY] {system_name} - All {MAX_RETRY_ATTEMPTS} attempts exhausted")
+            print(f"[RETRY] {system_name} - All attempts exhausted")
     
-    # If we've exhausted all attempts, return the last result anyway
-    # This allows the system to still record data even if validation failed
     return gpu_temps, MAX_RETRY_ATTEMPTS, validation_messages
 
 
-# ============================================================================
-# EXISTING FUNCTIONS (keep all your existing functions here)
-# ============================================================================
+async def process_single_system_async(system, bmc_credentials, redis_client, created_time):
+    """
+    Process one system asynchronously (non-blocking)
+    Returns temperature data dict or None
+    """
+    system_name = system.get("system")
+    if not system_name or system_name not in bmc_credentials:
+        return None
+    
+    should_check, reason = should_check_system_now(system_name, redis_client)
+    
+    if not should_check:
+        print(f"SKIPPING {system_name}: {reason}")
+        return None
+    
+    print(f"✓ CHECKING {system_name}: {reason}")
+    
+    credentials = bmc_credentials[system_name]
+    bmc_ip = credentials["bmc_ip"]
+    username = credentials["username"]
+    password = credentials["password"]
+    
+    system_type = determine_system_type(system_name)
+    
+    # Use async retry (non-blocking)
+    gpu_temperatures, attempts_made, _ = await fetch_gpu_temperatures_with_retry_async(
+        system_name, bmc_ip, username, password, system_type
+    )
+    
+    if gpu_temperatures is not None:
+        is_critical, max_temp, critical_gpus = is_critical_temperature(gpu_temperatures)
+        
+        if redis_client:
+            update_critical_systems_list(system_name, is_critical, max_temp, redis_client)
+        
+        if is_critical:
+            print(f"CRITICAL: {system_name} - {max_temp}°C")
+        
+        temp_data = {
+            "system": system_name,
+            "bmc_ip": bmc_ip,
+            "gpu_temperatures": gpu_temperatures,
+            "symbol": "°C",
+            "created": created_time,
+            "updated": created_time,
+        }
+        
+        valid_temps = [t for t in gpu_temperatures if t is not None]
+        print(f"✓ {system_name}: {len(valid_temps)}/8 GPUs, {attempts_made} attempts")
+        
+        if redis_client:
+            record_system_check_time(system_name, redis_client)
+        
+        return temp_data
+    else:
+        print(f"✗ {system_name}: Failed after {attempts_made} attempts")
+        return None
+
+
+async def fetch_system_temperature_data_async():
+    """
+    Main async function - processes systems CONCURRENTLY
+    
+    OLD: Sequential processing - 100 systems × 30s = 50 minutes!
+    NEW: Concurrent batches - 100 systems ÷ 10 concurrent × 10s = ~2 minutes!
+    """
+    try:
+        redis_client = get_redis_client()
+        
+        if redis_client:
+            print("=" * 80)
+            print("NON-BLOCKING CONCURRENT TEMPERATURE MONITORING")
+            print("=" * 80)
+            critical_systems = get_critical_systems(redis_client)
+            if critical_systems:
+                print(f"{len(critical_systems)} critical system(s) monitored")
+            print(f"Max concurrent: {MAX_CONCURRENT_SYSTEMS} systems")
+            print("=" * 80)
+        
+        bmc_credentials = parse_bmc_credentials()
+        if not bmc_credentials:
+            print("No BMC credentials")
+            return
+
+        if SystemTemperature is None:
+            print("SystemTemperature model unavailable")
+            return
+
+        systems_model = Systems()
+        all_systems = systems_model.find({})
+        print(f"Found {len(all_systems)} systems to check")
+
+        if not all_systems:
+            return
+
+        created_time = datetime.now()
+        
+        # Create concurrent tasks for ALL systems
+        tasks = [
+            process_single_system_async(system, bmc_credentials, redis_client, created_time)
+            for system in all_systems
+        ]
+        
+        # Limit concurrency with semaphore (prevents overwhelming network)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_SYSTEMS)
+        
+        async def bounded_task(task):
+            async with semaphore:
+                return await task
+        
+        print(f"Processing {len(tasks)} systems with {MAX_CONCURRENT_SYSTEMS} concurrent workers...")
+        start_time = datetime.now()
+        
+        # Execute all tasks concurrently!
+        results = await asyncio.gather(
+            *[bounded_task(task) for task in tasks], 
+            return_exceptions=True
+        )
+        
+        elapsed = (datetime.now() - start_time).total_seconds()
+        
+        # Filter successful results
+        temperature_results = [
+            result for result in results 
+            if result is not None and not isinstance(result, Exception)
+        ]
+        
+        print(f"\n{'=' * 80}")
+        print(f"COMPLETED: {len(temperature_results)}/{len(all_systems)} systems in {elapsed:.1f}s")
+        print(f"Throughput: {len(all_systems)/elapsed:.1f} systems/sec")
+        print(f"{'=' * 80}\n")
+
+        # Save to database
+        if temperature_results:
+            print(f"Saving {len(temperature_results)} records to database...")
+            system_temp = SystemTemperature()
+            successful = 0
+            
+            for temp_data in temperature_results:
+                try:
+                    system_temp.create(temp_data)
+                    successful += 1
+                except Exception as e:
+                    print(f"DB error for {temp_data['system']}: {e}")
+            
+            print(f"Saved {successful}/{len(temperature_results)} records")
+        else:
+            print("No temperature data collected")
+
+    except Exception as e:
+        print(f"Error in async temperature fetch: {e}")
+        import traceback
+        traceback.print_exc()
 
 @shared_task
 def say_hello():
@@ -367,206 +518,69 @@ def determine_system_type(system_name: str):
 
 def fetch_gpu_temperatures_dell_ssh(bmc_ip: str, username: str, password: str, system_name: str):
     """
-    Fetch GPU temperatures for Dell systems via SSH.
-    Requires running 'racadm debug invoke rootshellash' first, then using curl
-    to query the local Redfish endpoint for each GPU's temperature.
-    Uses an interactive shell to maintain the root shell context.
-    Returns a list of 8 temperatures (indexed 0-7) or None if failed.
+    OPTIMIZED Dell SSH function
+    - Reduced initial wait: 2s → 1s
+    - Reduced root shell wait: 5s → 2s  
+    - Reduced per-GPU wait: 2s → 1s
+    
+    Total time saved: ~40% faster per Dell system
     """
-    import time
+    import time  # Still need time.sleep here as this runs in thread pool
     
     try:
-        print(f"[DELL DEBUG] Attempting Dell SSH connection to {bmc_ip}")
-
-        # Create SSH client
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
-        # Connect with timeout
-        print(f"[DELL DEBUG] Connecting to {bmc_ip} with username: {username}")
-        ssh.connect(
-            bmc_ip,
-            username=username,
-            password=password,
-            timeout=30,
-            look_for_keys=False,
-            allow_agent=False
-        )
-        print(f"[DELL DEBUG] Successfully connected to {bmc_ip}")
-
-        # Open an interactive shell session
-        print(f"[DELL DEBUG] Opening interactive shell")
+        ssh.connect(bmc_ip, username=username, password=password, timeout=15, 
+                   look_for_keys=False, allow_agent=False)
+        
         shell = ssh.invoke_shell()
-        shell.settimeout(30)
+        shell.settimeout(15)
         
-        # Wait for initial prompt
-        print(f"[DELL DEBUG] Waiting for initial prompt (2 seconds)...")
-        time.sleep(2)
-        
-        # Clear any initial output
-        initial_output = ""
+        time.sleep(1)  # Reduced from 2s
         if shell.recv_ready():
-            initial_output = shell.recv(65535).decode('utf-8', errors='ignore')
-            print(f"[DELL DEBUG] Initial output received ({len(initial_output)} chars): {initial_output[:500]}")
-        else:
-            print(f"[DELL DEBUG] No initial output ready")
+            _ = shell.recv(65535).decode('utf-8', errors='ignore')
 
-        # Invoke the root shell
-        print(f"[DELL DEBUG] Sending racadm command: 'racadm debug invoke rootshellash'")
         shell.send("racadm debug invoke rootshellash\n")
+        time.sleep(2)  # Reduced from 5s
         
-        print(f"[DELL DEBUG] Waiting for root shell to initialize (5 seconds as configured)...")
-        time.sleep(5)
-        
-        # Read the output from racadm command
-        racadm_output = ""
         if shell.recv_ready():
-            racadm_output = shell.recv(65535).decode('utf-8', errors='ignore')
-            print(f"[DELL DEBUG] Root shell response ({len(racadm_output)} chars):")
-            print(f"[DELL DEBUG] ===== START RACADM OUTPUT =====")
-            print(racadm_output)
-            print(f"[DELL DEBUG] ===== END RACADM OUTPUT =====")
-        else:
-            print(f"[DELL DEBUG] WARNING: No output ready after racadm command")
-
-        # Test if shell is responsive
-        print(f"[DELL DEBUG] Testing shell responsiveness with 'echo test'")
-        shell.send("echo test\n")
-        time.sleep(1)
-        test_output = ""
-        if shell.recv_ready():
-            test_output = shell.recv(65535).decode('utf-8', errors='ignore')
-            print(f"[DELL DEBUG] Echo test response: {test_output}")
-        else:
-            print(f"[DELL DEBUG] WARNING: No response to echo test")
+            _ = shell.recv(65535).decode('utf-8', errors='ignore')
 
         gpu_temps = [None] * 8
 
-        # Query each GPU temperature (OAM_0 through OAM_7)
         for gpu_num in range(8):
-            try:
-                print(f"[DELL DEBUG] === Processing GPU {gpu_num} ===")
+            marker = f"GPU{gpu_num}TEMP"
+            curl_cmd = (
+                f"curl -s http://192.168.31.1/redfish/v1/Chassis/OAM_{gpu_num}/"
+                f"ThermalSubsystem/ThermalMetrics 2>/dev/null | "
+                f"awk '/GPU_{gpu_num}_DIE_TEMP/{{f=1}} f && /ReadingCelsius/"
+                f"{{print \"{marker}:\" $2; exit}}'\n"
+            )
+            
+            shell.send(curl_cmd)
+            time.sleep(1)  # Reduced from 2s
+            
+            if shell.recv_ready():
+                output = shell.recv(65535).decode('utf-8', errors='ignore')
                 
-                # First, try to test if curl is available
-                if gpu_num == 0:  # Only test once
-                    print(f"[DELL DEBUG] Testing curl availability")
-                    shell.send("which curl\n")
-                    time.sleep(1)
-                    which_output = ""
-                    if shell.recv_ready():
-                        which_output = shell.recv(65535).decode('utf-8', errors='ignore')
-                        print(f"[DELL DEBUG] 'which curl' output: {which_output}")
-                
-                # Build the curl command to query the local Redfish endpoint
-                marker = f"GPU{gpu_num}TEMP"
-                curl_cmd = (
-                    f"curl -s http://192.168.31.1/redfish/v1/Chassis/OAM_{gpu_num}/ThermalSubsystem/ThermalMetrics 2>/dev/null | "
-                    f"awk '/GPU_{gpu_num}_DIE_TEMP/{{f=1}} f && /ReadingCelsius/{{print \"{marker}:\" $2; exit}}'\n"
-                )
-                
-                print(f"[DELL DEBUG] Sending command: {curl_cmd.strip()}")
-                shell.send(curl_cmd)
-                
-                print(f"[DELL DEBUG] Waiting 2 seconds for curl to complete...")
-                time.sleep(2)
-                
-                # Read the output
-                output = ""
-                if shell.recv_ready():
-                    output = shell.recv(65535).decode('utf-8', errors='ignore')
-                    print(f"[DELL DEBUG] GPU {gpu_num} raw output ({len(output)} chars):")
-                    print(f"[DELL DEBUG] ----- START OUTPUT -----")
-                    print(output)
-                    print(f"[DELL DEBUG] ----- END OUTPUT -----")
-                else:
-                    print(f"[DELL DEBUG] WARNING: No output ready for GPU {gpu_num}")
-                
-                # Parse the output looking for our marker
                 if marker in output:
-                    print(f"[DELL DEBUG] Found marker '{marker}' in output")
                     for line in output.split("\n"):
-                        line = line.strip()
-
-                        # Only accept real output lines, not echoed commands
-                        if not line.startswith(f"{marker}:"):
-                            continue
-
-                        print(f"[DELL DEBUG] Marker line: {line}")
-
-                        try:
-                            temp_str = line.split(":", 1)[1].strip()
-                            temp = float(temp_str)
-                            gpu_temps[gpu_num] = temp
-                            print(f"[DELL DEBUG] Successfully parsed GPU_{gpu_num}: {temp}°C")
-                        except Exception as e:
-                            print(f"[DELL DEBUG] Parse error for GPU_{gpu_num}: {e}, line: {line}")
-                        break
-
-                else:
-                    print(f"[DELL DEBUG] Marker '{marker}' NOT found in output, trying alternative parsing...")
-                    
-                    # Try alternative parsing - look for ReadingCelsius in raw output
-                    if "ReadingCelsius" in output:
-                        print(f"[DELL DEBUG] Found 'ReadingCelsius' in output, attempting regex parse")
-                        pattern = rf'GPU_{gpu_num}_DIE_TEMP.*?ReadingCelsius["\s:]+(\d+\.?\d*)'
-                        match = re.search(pattern, output, re.DOTALL)
-                        if match:
+                        if line.strip().startswith(f"{marker}:"):
                             try:
-                                temp = float(match.group(1))
+                                temp = float(line.split(":", 1)[1].strip())
                                 gpu_temps[gpu_num] = temp
-                                print(f"[DELL DEBUG] Successfully parsed GPU_{gpu_num} via regex: {temp}°C")
-                            except ValueError as e:
-                                print(f"[DELL DEBUG] Regex parse error for GPU_{gpu_num}: {e}")
-                        else:
-                            print(f"[DELL DEBUG] Regex pattern did not match for GPU_{gpu_num}")
-                    else:
-                        print(f"[DELL DEBUG] 'ReadingCelsius' NOT found in output for GPU_{gpu_num}")
-                        
-                        # Try direct curl to see raw JSON
-                        if gpu_num == 0:  # Only do this once for debugging
-                            print(f"[DELL DEBUG] Attempting direct curl to see raw JSON response...")
-                            direct_curl = f"curl -s http://192.168.31.1/redfish/v1/Chassis/OAM_{gpu_num}/ThermalSubsystem/ThermalMetrics\n"
-                            shell.send(direct_curl)
-                            time.sleep(3)
-                            if shell.recv_ready():
-                                raw_json = shell.recv(65535).decode('utf-8', errors='ignore')
-                                print(f"[DELL DEBUG] Raw JSON response:")
-                                print(f"[DELL DEBUG] ----- START RAW JSON -----")
-                                print(raw_json[:1000])  # First 1000 chars
-                                print(f"[DELL DEBUG] ----- END RAW JSON -----")
+                            except:
+                                pass
+                            break
 
-            except Exception as e:
-                print(f"[DELL DEBUG] Exception fetching GPU_{gpu_num}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-
-        # Close the shell and SSH connection
-        print(f"[DELL DEBUG] Closing SSH connection")
         shell.close()
         ssh.close()
 
         valid_temps = [t for t in gpu_temps if t is not None]
-        print(f"[DELL DEBUG] Final results: {len(valid_temps)}/8 valid temperatures")
-        print(f"[DELL DEBUG] GPU temps array: {gpu_temps}")
-        
-        if len(valid_temps) == 0:
-            print(f"[DELL DEBUG] FAILURE: No valid GPU temperatures found for Dell system {bmc_ip}")
-            return None
+        return gpu_temps if len(valid_temps) > 0 else None
 
-        print(f"[DELL DEBUG] SUCCESS: Retrieved {len(valid_temps)}/8 GPU temperatures from Dell {bmc_ip}")
-        return gpu_temps
-
-    except paramiko.AuthenticationException:
-        print(f"[DELL DEBUG] ERROR: SSH authentication failed for {bmc_ip}")
-        return None
-    except paramiko.SSHException as e:
-        print(f"[DELL DEBUG] ERROR: SSH connection error for {bmc_ip}: {e}")
-        return None
     except Exception as e:
-        print(f"[DELL DEBUG] ERROR: Unexpected error fetching Dell temperatures from {bmc_ip}: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[DELL] Error: {e}")
         return None
 
 def fetch_gpu_temperatures_banff_ssh(rack_manager_ip: str, username: str, password: str, system_name: str):
@@ -596,14 +610,14 @@ def fetch_gpu_temperatures_banff_ssh(rack_manager_ip: str, username: str, passwo
             rack_manager_ip,
             username=username,
             password=password,
-            timeout=30,
+            timeout=15,
             look_for_keys=False,
             allow_agent=False
         )
 
         # Execute the command with dynamic rack ID
         command = f"set sys cmd -i {rack_id} -c sdr"
-        stdin, stdout, stderr = ssh.exec_command(command, timeout=30)
+        stdin, stdout, stderr = ssh.exec_command(command, timeout=15)
 
         # Read output
         output = stdout.read().decode('utf-8')
@@ -671,7 +685,7 @@ def fetch_gpu_temperatures_redfish(bmc_ip: str, username: str, password: str, sy
             if system_type == "smci":
                 # SMCI: GPUs numbered 1-8
                 url = f"https://{bmc_ip}/redfish/v1/Chassis/1/Thermal"
-                response = requests.get(url, auth=(username, password), verify=False, timeout=30)
+                response = requests.get(url, auth=(username, password), verify=False, timeout=15)
                 if response.status_code != 200:
                     print(f"SMCI request failed for {bmc_ip}: HTTP {response.status_code}")
                     return None
@@ -699,7 +713,7 @@ def fetch_gpu_temperatures_redfish(bmc_ip: str, username: str, password: str, sy
             elif system_type == "miramar":
                 # Miramar: GPUs numbered 0-7
                 url = f"https://{bmc_ip}/redfish/v1/Chassis/Miramar_Sensor/Thermal"
-                response = requests.get(url, auth=(username, password), verify=False, timeout=30)
+                response = requests.get(url, auth=(username, password), verify=False, timeout=15)
                 if response.status_code != 200:
                     print(f"Miramar request failed for {bmc_ip}: HTTP {response.status_code}")
                     return None
@@ -727,7 +741,7 @@ def fetch_gpu_temperatures_redfish(bmc_ip: str, username: str, password: str, sy
             elif system_type == "gbt":
                 # Gigabyte: GPUs numbered 0-7
                 url = f"https://{bmc_ip}/redfish/v1/Chassis/1/Thermal"
-                response = requests.get(url, auth=(username, password), verify=False, timeout=30)
+                response = requests.get(url, auth=(username, password), verify=False, timeout=15)
                 if response.status_code != 200:
                     print(f"Gigabyte request failed for {bmc_ip}: HTTP {response.status_code}")
                     return None
@@ -1141,172 +1155,8 @@ def fetch_temperature_data():
 @shared_task
 def fetch_system_temperature_data():
     """
-    Fetch system GPU temperature data with dynamic scheduling for critical systems.
-    Systems with temps >= 80°C are checked every 30 seconds.
-    Normal systems are checked every 5 minutes.
+    Celery task wrapper - runs async code in event loop
+    
+    This is the ONLY function you need to call from Celery beat!
     """
-    try:
-        # Get Redis client for tracking critical systems
-        redis_client = get_redis_client()
-        
-        if redis_client:
-            print("=" * 80)
-            print("SYSTEM TEMPERATURE CHECK - CRITICAL MONITORING ENABLED")
-            print("=" * 80)
-            critical_systems = get_critical_systems(redis_client)
-            if critical_systems:
-                print(f"🔥 {len(critical_systems)} system(s) currently at critical temperatures:")
-                for sys_name, data in critical_systems.items():
-                    print(f"   - {sys_name}: {data['max_temp']}°C (checks: {data['check_count']})")
-            print("=" * 80)
-        
-        # Parse BMC credentials from environment
-        bmc_credentials = parse_bmc_credentials()
-
-        if not bmc_credentials:
-            print("No valid BMC credentials found")
-            return
-
-        # Check if SystemTemperature model is available
-        if SystemTemperature is None:
-            print("ERROR: SystemTemperature model is not available.")
-            return
-
-        # Get systems from database
-        print("Fetching systems from database...")
-        try:
-            systems_model = Systems()
-            all_systems = systems_model.find({})
-            print(f"Found {len(all_systems)} systems in database")
-        except Exception as e:
-            print(f"Error fetching systems from database: {e}")
-            return
-
-        if not all_systems:
-            print("No systems found in database")
-            return
-
-        system_temperature_list = []
-        created_time = datetime.now()
-        matched_systems = 0
-        systems_checked = 0
-        systems_skipped = 0
-
-        # Process each system from database
-        for system in all_systems:
-            system_name = system.get("system")
-            if not system_name:
-                print(f"System record missing system field: {system}")
-                continue
-
-            # Check if we have BMC credentials for this system
-            if system_name not in bmc_credentials:
-                print(f"No BMC credentials found for system: {system_name}")
-                continue
-
-            matched_systems += 1
-            
-            # Check if this system should be checked now based on critical status
-            should_check, reason = should_check_system_now(system_name, redis_client)
-            
-            if not should_check:
-                systems_skipped += 1
-                print(f"⏭️  SKIPPING {system_name}: {reason}")
-                continue
-            
-            systems_checked += 1
-            print(f"✓ CHECKING {system_name}: {reason}")
-            
-            credentials = bmc_credentials[system_name]
-            bmc_ip = credentials["bmc_ip"]
-            username = credentials["username"]
-            password = credentials["password"]
-
-            # Determine system type
-            system_type = determine_system_type(system_name)
-            print(f"Processing system: {system_name} (BMC: {bmc_ip}, Type: {system_type})")
-
-            # Fetch temperatures with retry logic
-            gpu_temperatures, attempts_made, validation_msgs = fetch_gpu_temperatures_with_retry(
-                system_name, bmc_ip, username, password, system_type
-            )
-
-            if gpu_temperatures is not None:
-                # Check if temperatures are critical
-                is_critical, max_temp, critical_gpus = is_critical_temperature(gpu_temperatures)
-                
-                # Update critical systems tracking in Redis
-                if redis_client:
-                    update_critical_systems_list(system_name, is_critical, max_temp, redis_client)
-                
-                # Log critical temperature alert
-                if is_critical:
-                    print(f"🚨 CRITICAL TEMPERATURE ALERT: {system_name}")
-                    print(f"   Max GPU temp: {max_temp}°C (Threshold: {CRITICAL_TEMP_THRESHOLD}°C)")
-                    print(f"   Critical GPUs: {critical_gpus}")
-                    print(f"   This system will now be checked every {CRITICAL_CHECK_INTERVAL} seconds")
-                
-                # Create temperature record with GPU array
-                temp_data = {
-                    "system": system_name,
-                    "bmc_ip": bmc_ip,
-                    "gpu_temperatures": gpu_temperatures,
-                    "symbol": "°C",
-                    "created": created_time,
-                    "updated": created_time,
-                }
-                system_temperature_list.append(temp_data)
-
-                valid_temps = [t for t in gpu_temperatures if t is not None]
-                print(f"✓ Collected temperatures for {system_name} after {attempts_made} attempt(s): {len(valid_temps)}/8 GPUs")
-                print(f"  GPU temps: {gpu_temperatures}")
-                print(f"  Max temp: {max_temp}°C {'🔥 CRITICAL' if is_critical else '✅ Normal'}")
-                
-                # Record check time
-                if redis_client:
-                    record_system_check_time(system_name, redis_client)
-            else:
-                print(f"✗ Failed to collect GPU temperatures for {system_name} after {attempts_made} attempts")
-
-        print(f"\n{'=' * 80}")
-        print(f"CHECK SUMMARY:")
-        print(f"  Matched systems: {matched_systems}")
-        print(f"  Systems checked: {systems_checked}")
-        print(f"  Systems skipped: {systems_skipped}")
-        print(f"{'=' * 80}\n")
-
-        # Upload to DB with detailed logging
-        if system_temperature_list:
-            print(f"Attempting to save {len(system_temperature_list)} GPU temperature records to database...")
-            try:
-                system_temp = SystemTemperature()
-                print("SystemTemperature model initialized successfully")
-
-                successful_inserts = 0
-                failed_inserts = 0
-
-                for i, temp_data in enumerate(system_temperature_list):
-                    try:
-                        valid_gpus = len([t for t in temp_data["gpu_temperatures"] if t is not None])
-                        print(f"Inserting record {i+1}/{len(system_temperature_list)}: {temp_data['system']} - {valid_gpus}/8 GPUs")
-                        result = system_temp.create(temp_data)
-                        print(f"Database insert result: {result}")
-                        successful_inserts += 1
-                    except Exception as e:
-                        print(f"Failed to insert record {i+1} ({temp_data['system']}): {e}")
-                        failed_inserts += 1
-
-                print(f"Database insertion complete: {successful_inserts} successful, {failed_inserts} failed")
-
-            except Exception as e:
-                print(f"Error initializing SystemTemperature model: {e}")
-                import traceback
-                traceback.print_exc()
-        else:
-            print("No system GPU temperature data collected to save")
-
-    except Exception as e:
-        print(f"Error in fetch_system_temperature_data: {e}")
-        import traceback
-        traceback.print_exc()
-        return
+    asyncio.run(fetch_system_temperature_data_async())

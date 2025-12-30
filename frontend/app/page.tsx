@@ -356,21 +356,36 @@ const TemperatureChart = ({ site }: { site: string }) => {
     const grouped: any[] = [];
     const cfg: any = {};
   
+    const normalizeTime = (date: string) => {
+      const d = new Date(date);
+      d.setSeconds(0, 0);
+      return d.toISOString();
+    };
+  
     data.forEach((entry) => {
-      let gp = grouped.find((g) => g.created === entry.created);
+      const created = normalizeTime(entry.created);
+  
+      let gp = grouped.find((g) => g.created === created);
       if (!gp) {
-        gp = { created: entry.created };
+        gp = { created };
         grouped.push(gp);
       }
+  
       gp[entry.location] = entry.reading;
       if (!cfg[entry.location]) {
         cfg[entry.location] = { label: entry.location };
       }
     });
   
-    // ---- Apply 30-min moving average ----
-    const averaged = grouped.map((point, idx) => {
-      const windowStart = new Date(point.created).getTime() - 30 * 60 * 1000; // 30 min earlier
+    grouped.sort(
+      (a, b) =>
+        new Date(a.created).getTime() - new Date(b.created).getTime()
+    );
+  
+    const averaged = grouped.map((point) => {
+      const windowStart =
+        new Date(point.created).getTime() - 30 * 60 * 1000;
+  
       const windowPoints = grouped.filter(
         (p) =>
           new Date(p.created).getTime() >= windowStart &&
@@ -383,9 +398,10 @@ const TemperatureChart = ({ site }: { site: string }) => {
         const vals = windowPoints
           .map((p) => p[location])
           .filter((v) => v !== undefined);
-        if (vals.length > 0) {
+  
+        if (vals.length) {
           averagedPoint[location] =
-            vals.reduce((sum, v) => sum + v, 0) / vals.length;
+            vals.reduce((a, b) => a + b, 0) / vals.length;
         }
       });
   
@@ -394,7 +410,7 @@ const TemperatureChart = ({ site }: { site: string }) => {
   
     setFiltered(averaged);
     setConfig(cfg);
-  }, [data]);
+  }, [data]);  
   
 
   useEffect(() => {
