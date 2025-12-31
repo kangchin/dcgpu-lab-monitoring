@@ -29,6 +29,10 @@ from puresnmp import Client, V2C, ObjectIdentifier as OID
 from dotenv import load_dotenv
 import urllib3
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
+
+EXECUTOR = ThreadPoolExecutor(max_workers=20)  # Adjust based on needs
 
 # Disable SSL warnings for self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -284,19 +288,19 @@ async def fetch_gpu_temperatures_with_retry_async(system_name, bmc_ip, username,
         
         if system_type == "banff":
             gpu_temps = await loop.run_in_executor(
-                None,  # Uses default ThreadPoolExecutor
+                EXECUTOR,  
                 fetch_gpu_temperatures_banff_ssh, 
                 bmc_ip, username, password, system_name
             )
         elif system_type == "dell":
             gpu_temps = await loop.run_in_executor(
-                None,
+                EXECUTOR,
                 fetch_gpu_temperatures_dell_ssh,
                 bmc_ip, username, password, system_name
             )
         else:
             gpu_temps = await loop.run_in_executor(
-                None,
+                EXECUTOR,
                 fetch_gpu_temperatures_redfish,
                 bmc_ip, username, password, system_type
             )
@@ -993,6 +997,22 @@ def parse_bmc_credentials():
     return credentials_dict
 
 
+def run_async_safely(coro):
+    """Run async code safely from sync context"""
+    try:
+        loop = asyncio.get_running_loop()
+        # Already have a loop, use it
+        return asyncio.ensure_future(coro)
+    except RuntimeError:
+        # No loop, create one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+
 @shared_task
 def fetch_power_data():
     try:
@@ -1043,7 +1063,7 @@ def fetch_power_data():
             output_power_total_oid = pdu.get("output_power_total_oid")
             system = pdu.get("system")
 
-            total_power = asyncio.run(snmpFetch(hostname, output_power_total_oid, "amd123", "power"))
+            total_power = run_async_safely(snmpFetch(hostname, output_power_total_oid, "amd123", "power"))
             total_power = total_power or 0  # default to 0 if None
 
             power_list.append(
@@ -1121,7 +1141,7 @@ def fetch_temperature_data():
 
             print(f"Processing: {hostname} ({location}-{position})")  # Debug print
 
-            curr_temperature = asyncio.run(snmpFetch(hostname, temperature_oid, "amd123", "temp"))
+            curr_temperature = run_async_safely(snmpFetch(hostname, temperature_oid, "amd123", "temp"))
             print(f"SNMP result for {hostname} ({location}-{position}): {curr_temperature}")  # Debug print
 
             if curr_temperature is not None:
@@ -1154,9 +1174,9 @@ def fetch_temperature_data():
 
 @shared_task
 def fetch_system_temperature_data():
-    """
-    Celery task wrapper - runs async code in event loop
-    
-    This is the ONLY function you need to call from Celery beat!
-    """
-    asyncio.run(fetch_system_temperature_data_async())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(fetch_system_temperature_data_async())
+    finally:
+        loop.close()
