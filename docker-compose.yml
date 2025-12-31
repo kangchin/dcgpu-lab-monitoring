@@ -43,7 +43,7 @@ services:
   celery:
     container_name: celery
     build: ./celery
-    command: celery -A celery_app worker -B --loglevel=INFO --max-tasks-per-child=1 -Q default --prefetch-multiplier=1
+    command: celery -A celery_app worker -B --loglevel=INFO
     env_file:
       - ./celery/.env
     volumes:
