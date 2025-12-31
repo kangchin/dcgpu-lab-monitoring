@@ -68,23 +68,6 @@ NORMAL_CHECK_INTERVAL = 300   # 5 minutes in seconds
 CRITICAL_SYSTEMS_KEY = "critical_temp_systems"
 LAST_CHECK_TIME_KEY = "system_temp_last_check"
 
-def get_redis_lock_client():
-    """Get Redis client for task locking"""
-    try:
-        redis_host = str(os.environ.get("REDIS_HOST") or "localhost")
-        redis_port = int(os.environ.get("REDIS_PORT") or 6379)
-        redis_password = str(os.environ.get("REDIS_PASSWORD") or "")
-        
-        return redis.Redis(
-            host=redis_host,
-            port=redis_port,
-            password=redis_password if redis_password else None,
-            db=0,
-            decode_responses=True
-        )
-    except Exception as e:
-        print(f"Error creating Redis client: {e}")
-        return None
 
 def get_redis_client():
     """Get Redis client for tracking critical systems"""
@@ -1032,23 +1015,6 @@ def run_async_safely(coro):
 
 @shared_task
 def fetch_power_data():
-    """
-    Fetch power data with Redis lock to prevent duplicate executions.
-    """
-    redis_client = get_redis_lock_client()
-    
-    lock_key = "celery:lock:fetch_power_data"
-    lock_timeout = 600  # 10 minutes
-    
-    if redis_client:
-        lock_acquired = redis_client.set(lock_key, "locked", nx=True, ex=lock_timeout)
-        
-        if not lock_acquired:
-            print("SKIPPING: Another worker is already running power fetch")
-            return
-        
-        print("Lock acquired - Starting power data fetch")
-    
     try:
         r = redis.Redis(
             host=os.environ.get("REDIS_HOST"),
@@ -1061,19 +1027,31 @@ def fetch_power_data():
         if not all_pdu:
             pdu_model = PDU()
             all_pdu = pdu_model.find({})
-            
+            # serialize the datetime
             for pdu in all_pdu:
                 if "created" in pdu and hasattr(pdu["created"], "isoformat"):
                     pdu["created"] = pdu["created"].isoformat()
                 if "updated" in pdu and hasattr(pdu["updated"], "isoformat"):
                     pdu["updated"] = pdu["updated"].isoformat()
 
+            # store in Redis with 3 days TTL
             r.setex("all_pdu", 259200, json.dumps(all_pdu))
         else:
+            # decode bytes/str safely
             if isinstance(all_pdu, bytes):
-                all_pdu = json.loads(all_pdu.decode("utf-8"))
+                try:
+                    all_pdu = json.loads(all_pdu.decode("utf-8"))
+                except Exception:
+                    all_pdu = json.loads(all_pdu)
             elif isinstance(all_pdu, str):
                 all_pdu = json.loads(all_pdu)
+            else:
+                # If some other type (e.g. memoryview), try to coerce
+                try:
+                    all_pdu = json.loads(all_pdu)
+                except Exception:
+                    print("Unexpected type for all_pdu from Redis; treating as empty")
+                    all_pdu = []
 
         power_list = []
         created_time = datetime.now()
@@ -1085,10 +1063,8 @@ def fetch_power_data():
             output_power_total_oid = pdu.get("output_power_total_oid")
             system = pdu.get("system")
 
-            total_power = run_async_safely(
-                snmpFetch(hostname, output_power_total_oid, "amd123", "power")
-            )
-            total_power = total_power or 0
+            total_power = run_async_safely(snmpFetch(hostname, output_power_total_oid, "amd123", "power"))
+            total_power = total_power or 0  # default to 0 if None
 
             power_list.append(
                 {
@@ -1101,7 +1077,7 @@ def fetch_power_data():
                 }
             )
 
-        # Upload to DB
+        # upload to DB
         power = Power()
         for power_data in power_list:
             power.create(
@@ -1112,46 +1088,14 @@ def fetch_power_data():
                 }
             )
 
-        print(f"Power data fetched: {len(power_list)} readings")
-        
+        print("Power data fetched and stored successfully into DB")
     except Exception as e:
         print(f"Error fetching power data: {e}")
-        if redis_client:
-            redis_client.delete(lock_key)
-        raise
-    finally:
-        if redis_client:
-            redis_client.delete(lock_key)
-            print("Lock released")
-
+        return
 
 
 @shared_task
 def fetch_temperature_data():
-    """
-    Fetch temperature data with Redis lock to prevent duplicate executions.
-    """
-    redis_client = get_redis_lock_client()
-    
-    # Lock key and timeout
-    lock_key = "celery:lock:fetch_temperature_data"
-    lock_timeout = 600  # 10 minutes (same as task interval)
-    
-    if redis_client:
-        # Try to acquire lock
-        lock_acquired = redis_client.set(
-            lock_key,
-            "locked",
-            nx=True,  # Only set if doesn't exist
-            ex=lock_timeout  # Expire after 10 minutes
-        )
-        
-        if not lock_acquired:
-            print("SKIPPING: Another worker is already running this task")
-            return
-        
-        print("Lock acquired - Starting temperature data fetch")
-    
     try:
         redis_host = str(os.environ.get("REDIS_HOST") or "localhost")
         redis_port = int(os.environ.get("REDIS_PORT") or 6379)
@@ -1167,15 +1111,17 @@ def fetch_temperature_data():
         if not temperature_pdu:
             pdu_model = PDU()
             temperature_pdu = pdu_model.find({"temperature": {"$exists": True}})
-            
+            # serialize the datetime
             for pdu_item in temperature_pdu:
                 if "created" in pdu_item and hasattr(pdu_item["created"], "isoformat"):
                     pdu_item["created"] = pdu_item["created"].isoformat()
                 if "updated" in pdu_item and hasattr(pdu_item["updated"], "isoformat"):
                     pdu_item["updated"] = pdu_item["updated"].isoformat()
 
+            # store in Redis with 3 days TTL
             r.setex("temperature_pdu", 259200, json.dumps(temperature_pdu))
         else:
+            # Only decode if it's bytes or str, not Awaitable
             if isinstance(temperature_pdu, bytes):
                 temperature_pdu = json.loads(temperature_pdu.decode("utf-8"))
             elif isinstance(temperature_pdu, str):
@@ -1193,13 +1139,10 @@ def fetch_temperature_data():
             temperature_oid = pdu.get("temperature", {}).get("oid")
             position = pdu.get("temperature", {}).get("position")
 
-            print(f"Processing: {hostname} ({location}-{position})")
+            print(f"Processing: {hostname} ({location}-{position})")  # Debug print
 
-            curr_temperature = run_async_safely(
-                snmpFetch(hostname, temperature_oid, "amd123", "temp")
-            )
-            
-            print(f"SNMP result for {hostname} ({location}-{position}): {curr_temperature}")
+            curr_temperature = run_async_safely(snmpFetch(hostname, temperature_oid, "amd123", "temp"))
+            print(f"SNMP result for {hostname} ({location}-{position}): {curr_temperature}")  # Debug print
 
             if curr_temperature is not None:
                 temperature_list.append(
@@ -1212,7 +1155,7 @@ def fetch_temperature_data():
                     }
                 )
 
-        # Upload to DB
+        # upload to DB
         temperature = Temperature()
         for temperature_data in temperature_list:
             temperature.create(
@@ -1223,20 +1166,10 @@ def fetch_temperature_data():
                 }
             )
 
-        print(f"Temperature data fetched: {len(temperature_list)} readings")
-        
+        print("Temperature data fetched and stored successfully into DB")
     except Exception as e:
         print(f"Error fetching temperature data: {e}")
-        # Release lock on error so task can retry
-        if redis_client:
-            redis_client.delete(lock_key)
-        raise
-    finally:
-        # Lock will auto-expire after 10 minutes, but we can delete it early on success
-        if redis_client:
-            redis_client.delete(lock_key)
-            print("Lock released")
-
+        return
 
 
 @shared_task
