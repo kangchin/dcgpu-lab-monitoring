@@ -1016,12 +1016,11 @@ def parse_bmc_credentials():
 
 def run_async_safely(coro):
     """Run async code safely from sync context"""
+    import asyncio
     try:
         loop = asyncio.get_running_loop()
-        # Already have a loop, use it
         return asyncio.ensure_future(coro)
     except RuntimeError:
-        # No loop, create one
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -1034,34 +1033,43 @@ def run_async_safely(coro):
 def fetch_power_data():
     """
     Fetch power data with Redis lock to prevent duplicate executions.
+    FIXED: Lock is now properly scoped and doesn't interfere with task execution.
     """
-    redis_client = get_redis_lock_client()
-    
-    lock_key = "celery:lock:fetch_power_data"
-    lock_timeout = 600  # 10 minutes
-    
-    if redis_client:
-        lock_acquired = redis_client.set(lock_key, "locked", nx=True, ex=lock_timeout)
+    try:
+        redis_host = str(os.environ.get("REDIS_HOST") or "localhost")
+        redis_port = int(os.environ.get("REDIS_PORT") or 6379)
+        redis_password = str(os.environ.get("REDIS_PASSWORD") or "")
+        
+        r = redis.Redis(
+            host=redis_host,
+            port=redis_port,
+            password=redis_password if redis_password else None,
+            db=0,
+            decode_responses=True
+        )
+        
+        # Try to acquire lock
+        lock_key = "celery:lock:fetch_power_data"
+        lock_acquired = r.set(lock_key, "locked", nx=True, ex=600)
         
         if not lock_acquired:
-            print("SKIPPING: Another worker is already running power fetch")
-            return
+            print("⏭️  SKIPPING power fetch: Lock already held by another worker")
+            return "skipped_locked"
         
-        print("Lock acquired - Starting power data fetch")
-    
-    try:
-        r = redis.Redis(
-            host=os.environ.get("REDIS_HOST"),
-            port=os.environ.get("REDIS_PORT"),
-            password=os.environ.get("REDIS_PASSWORD"),
-            db=0,
-        )
+        print("🔒 Power fetch: Lock acquired")
+        
+        # ===================================================================
+        # ACTUAL POWER FETCHING LOGIC (with lock held)
+        # ===================================================================
+        
         all_pdu = r.get("all_pdu")
 
         if not all_pdu:
+            print("Fetching PDU list from database...")
             pdu_model = PDU()
             all_pdu = pdu_model.find({})
             
+            # Serialize datetime objects
             for pdu in all_pdu:
                 if "created" in pdu and hasattr(pdu["created"], "isoformat"):
                     pdu["created"] = pdu["created"].isoformat()
@@ -1070,13 +1078,13 @@ def fetch_power_data():
 
             r.setex("all_pdu", 259200, json.dumps(all_pdu))
         else:
-            if isinstance(all_pdu, bytes):
-                all_pdu = json.loads(all_pdu.decode("utf-8"))
-            elif isinstance(all_pdu, str):
-                all_pdu = json.loads(all_pdu)
+            print("Using cached PDU list from Redis")
+            all_pdu = json.loads(all_pdu)
 
         power_list = []
         created_time = datetime.now()
+
+        print(f"Processing {len(all_pdu)} PDUs for power data...")
 
         for pdu in all_pdu:
             hostname = pdu.get("hostname")
@@ -1084,6 +1092,10 @@ def fetch_power_data():
             location = pdu.get("location")
             output_power_total_oid = pdu.get("output_power_total_oid")
             system = pdu.get("system")
+
+            if not all([hostname, output_power_total_oid]):
+                print(f"Skipping incomplete PDU: {hostname}")
+                continue
 
             total_power = run_async_safely(
                 snmpFetch(hostname, output_power_total_oid, "amd123", "power")
@@ -1101,28 +1113,37 @@ def fetch_power_data():
                 }
             )
 
-        # Upload to DB
-        power = Power()
-        for power_data in power_list:
-            power.create(
-                {
-                    **power_data,
-                    "created": created_time,
-                    "updated": created_time,
-                }
-            )
-
-        print(f"Power data fetched: {len(power_list)} readings")
+        # Save to database
+        if power_list:
+            power = Power()
+            for power_data in power_list:
+                power.create(
+                    {
+                        **power_data,
+                        "created": created_time,
+                        "updated": created_time,
+                    }
+                )
+            
+            print(f"✅ Power data saved: {len(power_list)} readings at {created_time}")
+        else:
+            print("⚠️  No power data collected")
+        
+        # Release lock after successful completion
+        r.delete(lock_key)
+        print("🔓 Power fetch: Lock released")
+        
+        return f"success_{len(power_list)}_readings"
         
     except Exception as e:
-        print(f"Error fetching power data: {e}")
-        if redis_client:
-            redis_client.delete(lock_key)
+        print(f"❌ Error in fetch_power_data: {e}")
+        # Release lock on error
+        try:
+            r.delete(lock_key)
+            print("🔓 Lock released due to error")
+        except:
+            pass
         raise
-    finally:
-        if redis_client:
-            redis_client.delete(lock_key)
-            print("Lock released")
 
 
 
@@ -1130,61 +1151,60 @@ def fetch_power_data():
 def fetch_temperature_data():
     """
     Fetch temperature data with Redis lock to prevent duplicate executions.
+    FIXED: Lock is now properly scoped and doesn't interfere with task execution.
     """
-    redis_client = get_redis_lock_client()
-    
-    # Lock key and timeout
-    lock_key = "celery:lock:fetch_temperature_data"
-    lock_timeout = 600  # 10 minutes (same as task interval)
-    
-    if redis_client:
-        # Try to acquire lock
-        lock_acquired = redis_client.set(
-            lock_key,
-            "locked",
-            nx=True,  # Only set if doesn't exist
-            ex=lock_timeout  # Expire after 10 minutes
-        )
-        
-        if not lock_acquired:
-            print("SKIPPING: Another worker is already running this task")
-            return
-        
-        print("Lock acquired - Starting temperature data fetch")
-    
     try:
         redis_host = str(os.environ.get("REDIS_HOST") or "localhost")
         redis_port = int(os.environ.get("REDIS_PORT") or 6379)
         redis_password = str(os.environ.get("REDIS_PASSWORD") or "")
+        
         r = redis.Redis(
             host=redis_host,
             port=redis_port,
             password=redis_password if redis_password else None,
             db=0,
+            decode_responses=True  # Important for lock operations
         )
+        
+        # Try to acquire lock (10 minute TTL, same as task interval)
+        lock_key = "celery:lock:fetch_temperature_data"
+        lock_acquired = r.set(lock_key, "locked", nx=True, ex=600)
+        
+        if not lock_acquired:
+            print("⏭️  SKIPPING temperature fetch: Lock already held by another worker")
+            return "skipped_locked"
+        
+        print("🔒 Temperature fetch: Lock acquired")
+        
+        # ===================================================================
+        # ACTUAL TEMPERATURE FETCHING LOGIC (with lock held)
+        # ===================================================================
+        
+        # Get PDU list from Redis cache or DB
         temperature_pdu = r.get("temperature_pdu")
 
         if not temperature_pdu:
+            print("Fetching PDU list from database...")
             pdu_model = PDU()
             temperature_pdu = pdu_model.find({"temperature": {"$exists": True}})
             
+            # Serialize datetime objects
             for pdu_item in temperature_pdu:
                 if "created" in pdu_item and hasattr(pdu_item["created"], "isoformat"):
                     pdu_item["created"] = pdu_item["created"].isoformat()
                 if "updated" in pdu_item and hasattr(pdu_item["updated"], "isoformat"):
                     pdu_item["updated"] = pdu_item["updated"].isoformat()
 
+            # Cache for 3 days
             r.setex("temperature_pdu", 259200, json.dumps(temperature_pdu))
         else:
-            if isinstance(temperature_pdu, bytes):
-                temperature_pdu = json.loads(temperature_pdu.decode("utf-8"))
-            elif isinstance(temperature_pdu, str):
-                temperature_pdu = json.loads(temperature_pdu)
-            else:
-                raise TypeError("Unexpected type for temperature_pdu from Redis")
+            print("Using cached PDU list from Redis")
+            temperature_pdu = json.loads(temperature_pdu)
 
         temperature_list = []
         created_time = datetime.now()
+
+        print(f"Processing {len(temperature_pdu)} PDUs for temperature data...")
 
         for pdu in temperature_pdu:
             hostname = pdu.get("hostname")
@@ -1193,15 +1213,18 @@ def fetch_temperature_data():
             temperature_oid = pdu.get("temperature", {}).get("oid")
             position = pdu.get("temperature", {}).get("position")
 
-            print(f"Processing: {hostname} ({location}-{position})")
+            if not all([hostname, temperature_oid, position]):
+                print(f"Skipping incomplete PDU: {hostname}")
+                continue
+
+            print(f"  Fetching: {hostname} ({location}-{position})")
 
             curr_temperature = run_async_safely(
                 snmpFetch(hostname, temperature_oid, "amd123", "temp")
             )
             
-            print(f"SNMP result for {hostname} ({location}-{position}): {curr_temperature}")
-
             if curr_temperature is not None:
+                print(f"    ✓ Got {curr_temperature}°C")
                 temperature_list.append(
                     {
                         "site": site,
@@ -1211,31 +1234,40 @@ def fetch_temperature_data():
                         "symbol": "°C",
                     }
                 )
+            else:
+                print(f"    ✗ No data returned")
 
-        # Upload to DB
-        temperature = Temperature()
-        for temperature_data in temperature_list:
-            temperature.create(
-                {
-                    **temperature_data,
-                    "created": created_time,
-                    "updated": created_time,
-                }
-            )
-
-        print(f"Temperature data fetched: {len(temperature_list)} readings")
+        # Save to database
+        if temperature_list:
+            temperature = Temperature()
+            for temperature_data in temperature_list:
+                temperature.create(
+                    {
+                        **temperature_data,
+                        "created": created_time,
+                        "updated": created_time,
+                    }
+                )
+            
+            print(f"✅ Temperature data saved: {len(temperature_list)} readings at {created_time}")
+        else:
+            print("⚠️  No temperature data collected")
+        
+        # Release lock after successful completion
+        r.delete(lock_key)
+        print("🔓 Temperature fetch: Lock released")
+        
+        return f"success_{len(temperature_list)}_readings"
         
     except Exception as e:
-        print(f"Error fetching temperature data: {e}")
-        # Release lock on error so task can retry
-        if redis_client:
-            redis_client.delete(lock_key)
+        print(f"❌ Error in fetch_temperature_data: {e}")
+        # Release lock on error
+        try:
+            r.delete(lock_key)
+            print("🔓 Lock released due to error")
+        except:
+            pass
         raise
-    finally:
-        # Lock will auto-expire after 10 minutes, but we can delete it early on success
-        if redis_client:
-            redis_client.delete(lock_key)
-            print("Lock released")
 
 
 
