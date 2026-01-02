@@ -1163,8 +1163,6 @@ def fetch_power_data():
             pass
         raise
 
-
-
 @shared_task
 def fetch_temperature_data():
     """
@@ -1302,7 +1300,6 @@ def fetch_temperature_data():
         except:
             pass
         raise
-
 
 @shared_task
 def fetch_system_temperature_data():
@@ -1459,7 +1456,6 @@ def fetch_system_temperature_data():
         traceback.print_exc()
         return
 
-
 def fetch_fan_speed_via_ipmi(bmc_ip: str, username: str, password: str):
     """
     Fetch fan speed data using ipmitool sdr command.
@@ -1539,7 +1535,6 @@ def fetch_fan_speed_via_ipmi(bmc_ip: str, username: str, password: str):
         print(f"Error fetching fan speed for {bmc_ip}: {e}")
         return None
 
-
 def process_systems_batch_parallel(systems_dict, batch_name="", max_workers=10):
     """
     Process a batch of systems in parallel using ThreadPoolExecutor.
@@ -1616,7 +1611,6 @@ def process_systems_batch_parallel(systems_dict, batch_name="", max_workers=10):
     
     print(f"[{batch_name}] Batch complete: {successful_systems} succeeded, {failed_systems} failed, {total_fans_recorded} total fans")
     return total_fans_recorded, successful_systems, failed_systems
-
 
 @shared_task
 def fetch_system_fan_speed_data(batch_start=None, batch_end=None):
