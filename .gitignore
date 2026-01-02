@@ -8,6 +8,8 @@ ssb/
 **/monthly_power_data.json
 **/power_capacity_data.json
 .github/
+
+deploy_celery.sh
 product_requirements.md
 test_script.py
 
