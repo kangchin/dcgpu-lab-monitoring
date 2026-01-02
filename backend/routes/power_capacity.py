@@ -80,47 +80,26 @@ def query_power_in_batches(power_model, query_filter, start_date, end_date, max_
     
     return all_results
 
-def calculate_max_capacity_for_month(start_date, end_date):
+def calculate_live_capacity_for_month(start_date, end_date):
     """
-    Calculate max capacity for each data hall for a given month.
+    Calculate live capacity for each data hall for a given month.
     
-    Max Capacity Calculation:
+    Live Capacity Calculation:
     - For each day in the month:
       - For each system in a data hall:
         - Find the highest power reading for that system on that day
       - Sum all system maximums for the data hall for that day
-    - The max capacity is the highest daily sum across all days in the month
+    - The live capacity is the highest daily sum across all days in the month
     
-    Available Capacity = Planned Capacity - Max Capacity
-    
-    Returns a dictionary with site keys and their calculated values
+    Returns a dictionary with site keys and their calculated live capacities
     """
     sites = ["odcdh1", "odcdh2", "odcdh3", "odcdh4", "odcdh5"]
     power_model = Power()
     
     result = {
         "month": start_date.strftime("%B %Y"),
-        "dh1_planned": PLANNED_CAPACITY["odcdh1"],
-        "dh1_max": 0,
-        "dh1_available": 0,
-        "dh2_planned": PLANNED_CAPACITY["odcdh2"],
-        "dh2_max": 0,
-        "dh2_available": 0,
-        "dh3_planned": PLANNED_CAPACITY["odcdh3"],
-        "dh3_max": 0,
-        "dh3_available": 0,
-        "dh4_planned": PLANNED_CAPACITY["odcdh4"],
-        "dh4_max": 0,
-        "dh4_available": 0,
-        "dh5_planned": PLANNED_CAPACITY["odcdh5"],
-        "dh5_max": 0,
-        "dh5_available": 0,
-        "total_planned": sum(PLANNED_CAPACITY.values()),
-        "total_max": 0,
-        "total_available": 0
     }
     
-    # Calculate for each site
     column_map = {
         "odcdh1": "dh1",
         "odcdh2": "dh2",
@@ -129,11 +108,11 @@ def calculate_max_capacity_for_month(start_date, end_date):
         "odcdh5": "dh5"
     }
     
-    total_max_capacity = 0
+    total_live_capacity = 0
     
     for site in sites:
         try:
-            print(f"Processing {site} for max capacity calculation...")
+            print(f"Processing {site} for live capacity calculation...")
             
             # Get all readings for this site for the month
             readings = query_power_in_batches(
@@ -149,7 +128,6 @@ def calculate_max_capacity_for_month(start_date, end_date):
                 continue
             
             # Group readings by day and system
-            # Structure: {day: {system: [readings]}}
             daily_system_readings = defaultdict(lambda: defaultdict(list))
             
             for reading in readings:
@@ -174,44 +152,64 @@ def calculate_max_capacity_for_month(start_date, end_date):
             for day, systems_data in daily_system_readings.items():
                 day_sum = 0
                 for system, power_readings in systems_data.items():
-                    # Get the maximum power reading for this system on this day
                     max_system_power = max(power_readings)
                     day_sum += max_system_power
                 
                 daily_sums.append(day_sum)
-                print(f"  {site} - {day}: {day_sum / 1000:.2f} kW (from {len(systems_data)} systems)")
             
-            # The max capacity is the highest daily sum
+            # The live capacity is the highest daily sum
             if daily_sums:
-                max_capacity_w = max(daily_sums)
-                max_capacity_kw = max_capacity_w / 1000  # Convert to kW
+                live_capacity_w = max(daily_sums)
+                live_capacity_kw = live_capacity_w / 1000
                 
                 col = column_map[site]
-                result[f"{col}_max"] = round(max_capacity_kw, 2)
+                result[f"{col}_live"] = round(live_capacity_kw, 2)
+                total_live_capacity += live_capacity_kw
                 
-                # Calculate Available Capacity: planned - max
-                planned = PLANNED_CAPACITY[site]
-                available = planned - max_capacity_kw
-                result[f"{col}_available"] = round(available, 2)
-                
-                total_max_capacity += max_capacity_kw
-                
-                print(f"{site}: Max Capacity = {max_capacity_kw:.2f} kW, Available = {available:.2f} kW")
+                print(f"{site}: Live Capacity = {live_capacity_kw:.2f} kW")
             
         except Exception as e:
-            print(f"Error calculating max capacity for {site}: {e}")
+            print(f"Error calculating live capacity for {site}: {e}")
             continue
     
-    # Calculate totals
-    result["total_max"] = round(total_max_capacity, 2)
-    total_planned = sum(PLANNED_CAPACITY.values())
-    total_available = total_planned - total_max_capacity
-    result["total_available"] = round(total_available, 2)
-    
-    print(f"Total Max Capacity: {total_max_capacity:.2f} kW")
-    print(f"Total Available: {total_available:.2f} kW")
+    result["total_live"] = round(total_live_capacity, 2)
     
     return result
+
+def calculate_historical_max_capacity():
+    """
+    Calculate the max capacity (highest live capacity across all historical months)
+    for each data hall.
+    
+    Returns a dictionary with max capacities per site
+    """
+    # Load all historical data
+    historical_data = load_capacity_data()
+    
+    if not historical_data:
+        return {}
+    
+    sites = ["dh1", "dh2", "dh3", "dh4", "dh5"]
+    max_capacities = {}
+    
+    for site in sites:
+        site_max = 0
+        
+        # Find the highest live capacity across all months for this site
+        for month_data in historical_data:
+            live_key = f"{site}_live"
+            if live_key in month_data:
+                live_capacity = month_data[live_key]
+                if live_capacity > site_max:
+                    site_max = live_capacity
+        
+        max_capacities[f"{site}_max"] = site_max
+    
+    # Calculate total max
+    total_max = sum(max_capacities.values())
+    max_capacities["total_max"] = total_max
+    
+    return max_capacities
 
 def auto_save_previous_month():
     """Automatically save previous month's capacity data if not already saved"""
@@ -233,10 +231,46 @@ def auto_save_previous_month():
         
         print(f"Auto-saving capacity data for {previous_month}")
         
-        # Calculate capacity data for previous month
-        capacity_data = calculate_max_capacity_for_month(first_day_previous, first_day_current)
-        capacity_data["auto_saved"] = True
-        capacity_data["saved_date"] = datetime.now().isoformat()
+        # Calculate live capacity for previous month
+        live_capacity_data = calculate_live_capacity_for_month(first_day_previous, first_day_current)
+        
+        # Get historical max capacities
+        historical_max = calculate_historical_max_capacity()
+        
+        # Build complete data structure
+        capacity_data = {
+            "month": previous_month,
+            "dh1_planned": PLANNED_CAPACITY["odcdh1"],
+            "dh1_live": live_capacity_data.get("dh1_live", 0),
+            "dh1_max": max(live_capacity_data.get("dh1_live", 0), historical_max.get("dh1_max", 0)),
+            "dh2_planned": PLANNED_CAPACITY["odcdh2"],
+            "dh2_live": live_capacity_data.get("dh2_live", 0),
+            "dh2_max": max(live_capacity_data.get("dh2_live", 0), historical_max.get("dh2_max", 0)),
+            "dh3_planned": PLANNED_CAPACITY["odcdh3"],
+            "dh3_live": live_capacity_data.get("dh3_live", 0),
+            "dh3_max": max(live_capacity_data.get("dh3_live", 0), historical_max.get("dh3_max", 0)),
+            "dh4_planned": PLANNED_CAPACITY["odcdh4"],
+            "dh4_live": live_capacity_data.get("dh4_live", 0),
+            "dh4_max": max(live_capacity_data.get("dh4_live", 0), historical_max.get("dh4_max", 0)),
+            "dh5_planned": PLANNED_CAPACITY["odcdh5"],
+            "dh5_live": live_capacity_data.get("dh5_live", 0),
+            "dh5_max": max(live_capacity_data.get("dh5_live", 0), historical_max.get("dh5_max", 0)),
+            "total_planned": sum(PLANNED_CAPACITY.values()),
+            "total_live": live_capacity_data.get("total_live", 0),
+            "total_max": max(live_capacity_data.get("total_live", 0), historical_max.get("total_max", 0)),
+            "auto_saved": True,
+            "saved_date": datetime.now().isoformat()
+        }
+        
+        # Calculate available capacities (planned - max)
+        for site in ["dh1", "dh2", "dh3", "dh4", "dh5"]:
+            planned = capacity_data[f"{site}_planned"]
+            max_cap = capacity_data[f"{site}_max"]
+            capacity_data[f"{site}_available"] = round(planned - max_cap, 2)
+        
+        capacity_data["total_available"] = round(
+            capacity_data["total_planned"] - capacity_data["total_max"], 2
+        )
         
         # Add to existing data and save
         existing_data.append(capacity_data)
@@ -275,13 +309,44 @@ def get_current_previous():
         # Load existing data
         existing_data = load_capacity_data()
         
-        # Check if current month data exists in saved data
-        current_data = next((item for item in existing_data if item['month'] == current_month), None)
+        # Calculate current month live capacity
+        current_live_data = calculate_live_capacity_for_month(first_day_current, current_date)
         
-        # If not, calculate it live
-        if not current_data:
-            print(f"Calculating live capacity data for {current_month}")
-            current_data = calculate_max_capacity_for_month(first_day_current, current_date)
+        # Get historical max capacities
+        historical_max = calculate_historical_max_capacity()
+        
+        # Build current month data structure
+        current_data = {
+            "month": current_month,
+            "dh1_planned": PLANNED_CAPACITY["odcdh1"],
+            "dh1_live": current_live_data.get("dh1_live", 0),
+            "dh1_max": max(current_live_data.get("dh1_live", 0), historical_max.get("dh1_max", 0)),
+            "dh2_planned": PLANNED_CAPACITY["odcdh2"],
+            "dh2_live": current_live_data.get("dh2_live", 0),
+            "dh2_max": max(current_live_data.get("dh2_live", 0), historical_max.get("dh2_max", 0)),
+            "dh3_planned": PLANNED_CAPACITY["odcdh3"],
+            "dh3_live": current_live_data.get("dh3_live", 0),
+            "dh3_max": max(current_live_data.get("dh3_live", 0), historical_max.get("dh3_max", 0)),
+            "dh4_planned": PLANNED_CAPACITY["odcdh4"],
+            "dh4_live": current_live_data.get("dh4_live", 0),
+            "dh4_max": max(current_live_data.get("dh4_live", 0), historical_max.get("dh4_max", 0)),
+            "dh5_planned": PLANNED_CAPACITY["odcdh5"],
+            "dh5_live": current_live_data.get("dh5_live", 0),
+            "dh5_max": max(current_live_data.get("dh5_live", 0), historical_max.get("dh5_max", 0)),
+            "total_planned": sum(PLANNED_CAPACITY.values()),
+            "total_live": current_live_data.get("total_live", 0),
+            "total_max": max(current_live_data.get("total_live", 0), historical_max.get("total_max", 0)),
+        }
+        
+        # Calculate available capacities (planned - max)
+        for site in ["dh1", "dh2", "dh3", "dh4", "dh5"]:
+            planned = current_data[f"{site}_planned"]
+            max_cap = current_data[f"{site}_max"]
+            current_data[f"{site}_available"] = round(planned - max_cap, 2)
+        
+        current_data["total_available"] = round(
+            current_data["total_planned"] - current_data["total_max"], 2
+        )
         
         # Get previous month data from saved data
         previous_data = next((item for item in existing_data if item['month'] == previous_month), None)
