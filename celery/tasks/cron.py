@@ -1271,11 +1271,23 @@ def fetch_temperature_data():
 
 
 
-@shared_task
-def fetch_system_temperature_data():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+@shared_task(bind=True)
+def fetch_system_temperature_data(self):
+    r = get_redis_lock_client()
+    lock_key = "celery:lock:fetch_system_temperature_data"
+
+    lock_acquired = r.set(lock_key, "locked", nx=True, ex=900)  # 15 min TTL
+    if not lock_acquired:
+        print("⏭️  SKIPPING system temperature fetch: already running")
+        return "skipped_locked"
+
     try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         return loop.run_until_complete(fetch_system_temperature_data_async())
     finally:
+        try:
+            r.delete(lock_key)
+        except:
+            pass
         loop.close()
