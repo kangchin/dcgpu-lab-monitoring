@@ -1628,6 +1628,17 @@ def fetch_system_fan_speed_data(batch_start=None, batch_end=None):
     """
     import time
     
+    # Acquire Redis lock to prevent duplicate execution
+    r = get_redis_lock_client()
+    lock_key = "celery:lock:fetch_system_fan_speed_data"
+    lock_acquired = r.set(lock_key, "locked", nx=True, ex=900)  # 15 min TTL
+    
+    if not lock_acquired:
+        print("⏭️  SKIPPING fan speed fetch: already running")
+        return "skipped_locked"
+    
+    print("🔒 Fan speed fetch: Lock acquired")
+    
     try:
         start_time = time.time()
         
@@ -1714,3 +1725,7 @@ def fetch_system_fan_speed_data(batch_start=None, batch_end=None):
         import traceback
         traceback.print_exc()
         return
+    finally:
+        # Always release the lock
+        r.delete(lock_key)
+        print("🔓 Fan speed fetch: Lock released")
