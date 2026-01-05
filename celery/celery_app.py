@@ -1,3 +1,5 @@
+# celery/celery_app.py - UPDATED VERSION
+
 import tasks
 import os
 from celery import Celery
@@ -22,6 +24,8 @@ app.conf.accept_content = ["json", "yaml"]
 app.conf.worker_send_task_events = True
 app.conf.enable_utc = False
 app.conf.timezone = "Asia/Kuala_Lumpur"
+
+# Updated beat schedule with more frequent system temperature checks
 app.conf.beat_schedule = {
     "fetch_power": {
         "task": "tasks.cron.fetch_power_data",
@@ -31,8 +35,13 @@ app.conf.beat_schedule = {
         "task": "tasks.cron.fetch_temperature_data",
         "schedule": timedelta(minutes=10),
     },
+    # The task itself will determine which systems to check based on their status
     "fetch_system_temperature": {
         "task": "tasks.cron.fetch_system_temperature_data",
-        "schedule": timedelta(minutes=5),  # Run every 5 minutes for system temps
+        "schedule": timedelta(minutes=10),  # Changed from 5 minutes to 10 minutes
+    },
+    "fetch_system_fan_speed": {
+        "task": "tasks.cron.fetch_system_fan_speed_data",
+        "schedule": timedelta(minutes=15),  # Run every 15 minutes to reduce the amount of data
     },
 }

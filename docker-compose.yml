@@ -44,12 +44,34 @@ services:
     container_name: celery
     build: ./celery
     command: celery -A celery_app worker -B --loglevel=INFO
+    restart: unless-stopped
     env_file:
       - ./celery/.env
     volumes:
       - ./celery/bmc_credentials.json:/app/bmc_credentials.json:ro
+      - metrics_dir:/metrics
     depends_on:
       - redis
+
+  celery-metrics:
+    container_name: celery-metrics
+    build: ./celery
+    command: python metrics_server.py
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+    env_file:
+      - ./celery/.env
+    volumes:
+      - metrics_dir:/metrics:ro
+    depends_on:
+      - celery
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9200/health').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   frontend:
     container_name: frontend
@@ -91,3 +113,4 @@ services:
 volumes:
   mongo-data:
   redis-data:
+  metrics_dir:
