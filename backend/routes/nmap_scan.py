@@ -101,7 +101,7 @@ def compare_with_database(scanned_devices):
     """
     # Fetch tracked systems and PDUs from database
     systems_model = Systems()
-    pdu_model = PDU()
+    pdu_model = Pdu()
     
     tracked_systems = systems_model.find({})
     tracked_pdus = pdu_model.find({})
