@@ -3,7 +3,7 @@ import re
 import subprocess
 from flask import Blueprint, jsonify
 from utils.models.systems import Systems
-from utils.models.pdu import PDU
+from utils.models.pdu import Pdu
 
 nmap_scan = Blueprint("nmap_scan", __name__)
 
