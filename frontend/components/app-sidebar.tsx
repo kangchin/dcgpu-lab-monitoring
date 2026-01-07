@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, Factory, Moon, Thermometer } from "lucide-react";
+import { Home, Factory, Moon, Thermometer, Radar } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Fragment } from "react";
 import {
@@ -39,6 +39,7 @@ const items = [
   {
     title: "Nmap Scan",
     url: "/nmap-scan",
+    icon: Radar,
     activeIndicator: "",
   },
   {
