@@ -1,8 +1,11 @@
-# Use slim Python 3.10 base image
 FROM python:3.10-slim
 
-# Set working directory
 WORKDIR /app
+
+# Install system dependencies (nmap)
+RUN apt-get update \
+    && apt-get install -y nmap \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY requirements.txt .
@@ -14,6 +17,4 @@ EXPOSE 5000
 # Copy project files
 COPY . .
 
-
-# Run the Flask app
 CMD ["flask", "run", "--host=0.0.0.0", "--port=5000"]
