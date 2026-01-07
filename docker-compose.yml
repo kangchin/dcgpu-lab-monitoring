@@ -48,7 +48,6 @@ services:
     env_file:
       - ./celery/.env
     volumes:
-      - ./celery/bmc_credentials.json:/app/bmc_credentials.json:ro
       - metrics_dir:/metrics
     depends_on:
       - redis

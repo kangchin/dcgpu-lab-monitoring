@@ -892,128 +892,62 @@ def fetch_gpu_temperatures_redfish(bmc_ip: str, username: str, password: str, sy
         print(f"Both attempts failed for {bmc_ip}")
         return None
 
-
 def parse_bmc_credentials():
     """
-    Parse BMC credentials from environment variable or file.
-    Tries multiple file paths to handle different environments.
+    Parse BMC credentials from the 'systems' collection in database.
+    Returns a dictionary mapping system names to their credentials.
+    
+    Returns:
+        dict: {system_name: {"bmc_ip": str, "username": str, "password": str}}
     """
-    import ast
-
-    # Try different file paths in order of preference
-    possible_paths = [
-        os.environ.get("BMC_CREDENTIALS_FILE"),  # Environment variable path
-        "/app/bmc_credentials.json",             # Docker container path
-        "./bmc_credentials.json",                # Local relative path
-        "bmc_credentials.json",                  # Current directory
-        os.path.join(os.path.dirname(__file__), "bmc_credentials.json"),  # Same dir as script
-    ]
-
-    # Remove None values and duplicates while preserving order
-    paths_to_try = []
-    for path in possible_paths:
-        if path and path not in paths_to_try:
-            paths_to_try.append(path)
-
-    print("=== BMC CREDENTIALS LOADING DEBUG ===")
-    print(f"Will try these paths in order: {paths_to_try}")
-
-    # Try environment variables first
-    bmc_credentials_str = os.environ.get("BMC_CREDENTIALS")
-    bmc_credentials_json = os.environ.get("BMC_CREDENTIALS_JSON")
-
-    credential_list = None
-
-    # Try JSON format from environment
-    if bmc_credentials_json:
-        try:
-            print("Parsing credentials from JSON environment variable")
-            credential_list = json.loads(bmc_credentials_json)
-            print("Successfully parsed JSON credentials from environment")
-        except Exception as e:
-            print(f"Error parsing JSON credentials from environment: {e}")
-
-    # Try Python literal format from environment
-    if not credential_list and bmc_credentials_str:
-        try:
-            print("Parsing credentials from Python literal environment variable")
-            cleaned_str = bmc_credentials_str.strip().replace("\n", "").replace("\r", "")
-            credential_list = ast.literal_eval(cleaned_str)
-            print("Successfully parsed Python literal credentials from environment")
-        except Exception as e:
-            print(f"Error parsing Python literal credentials from environment: {e}")
-
-    # Try loading from files if environment variables didn't work
-    if not credential_list:
-        for file_path in paths_to_try:
-            try:
-                print(f"Trying to load credentials from: {file_path}")
-                if not file_path or not os.path.exists(file_path):
-                    print(f"File does not exist: {file_path}")
-                    continue
-
-                with open(file_path, "r") as f:
-                    content = f.read()
-                    print(f"File found, content length: {len(content)} characters")
-                    credential_list = json.loads(content)
-                    print(f"Successfully loaded {len(credential_list)} credential sets from: {file_path}")
-                    break  # Stop trying other paths once we find a working file
-
-            except FileNotFoundError:
-                print(f"File not found: {file_path}")
-                continue
-            except json.JSONDecodeError as e:
-                print(f"JSON decode error in {file_path}: {e}")
-                continue
-            except Exception as e:
-                print(f"Error loading credentials from {file_path}: {e}")
-                continue
-
-    if not credential_list:
-        print("ERROR: No BMC credentials found in any location!")
-        print("Expected format: [['system','bmc_ip','username','password'], ...]")
-        print("Tried environment variables: BMC_CREDENTIALS, BMC_CREDENTIALS_JSON, BMC_CREDENTIALS_FILE")
-        print(f"Tried file paths: {paths_to_try}")
-        return {}
-
-    credentials_dict = {}
     try:
-        if not isinstance(credential_list, list):
-            print("BMC credentials must be a list format")
+        print("=== BMC CREDENTIALS LOADING FROM DATABASE (systems collection) ===")
+        
+        # Fetch systems with BMC credentials from database
+        systems_model = Systems()
+        all_systems = systems_model.find({})
+        
+        if not all_systems:
+            print("No systems found in database")
             return {}
-
-        for i, credential_set in enumerate(credential_list):
-            if not isinstance(credential_set, list):
-                print(f"Credential set {i+1} must be a list, got: {type(credential_set)}")
-                continue
-
-            if len(credential_set) != 4:
-                print(f"Credential set {i+1} must have exactly 4 elements: [system, bmc_ip, username, password], got: {credential_set}")
-                continue
-
-            system_name = str(credential_set[0]).strip()
-            bmc_ip = str(credential_set[1]).strip()
-            username = str(credential_set[2]).strip()
-            password = str(credential_set[3]).strip()
-
+        
+        print(f"Found {len(all_systems)} system records in database")
+        
+        credentials_dict = {}
+        systems_with_credentials = 0
+        
+        for system_record in all_systems:
+            system_name = system_record.get("system", "").strip()
+            
+            # Check if this system has BMC credentials
+            # Assuming credentials are stored in fields: bmc_ip, bmc_username, bmc_password
+            # Adjust field names based on your actual database schema
+            bmc_ip = system_record.get("bmc_ip", "").strip()
+            username = system_record.get("username", "").strip()
+            password = system_record.get("password", "").strip()
+            
+            # Skip systems without complete BMC credentials
             if not (system_name and bmc_ip and username and password):
-                print(f"Empty values in credential set {i+1}: {credential_set}")
                 continue
-
+            
             credentials_dict[system_name] = {
                 "bmc_ip": bmc_ip,
                 "username": username,
                 "password": password,
             }
+            systems_with_credentials += 1
             print(f"Loaded credentials for system: {system_name} (BMC: {bmc_ip})")
-
+        
+        print(f"Successfully loaded credentials for {systems_with_credentials} systems from database")
+        print(f"Systems without credentials: {len(all_systems) - systems_with_credentials}")
+        
+        return credentials_dict
+        
     except Exception as e:
-        print(f"Unexpected error processing credentials: {e}")
+        print(f"Error loading BMC credentials from database: {e}")
+        import traceback
+        traceback.print_exc()
         return {}
-
-    print(f"Successfully loaded credentials for {len(credentials_dict)} systems")
-    return credentials_dict
-
 
 def run_async_safely(coro):
     """Run async code safely from sync context"""
