@@ -37,6 +37,11 @@ const items = [
     activeIndicator: "",
   },
   {
+    title: "Nmap Scan",
+    url: "/nmap-scan",
+    activeIndicator: "",
+  },
+  {
     title: "OpenDC",
     icon: Factory,
     subitems: [
