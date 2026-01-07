@@ -7,10 +7,6 @@ from utils.models.pdu import Pdu
 
 nmap_scan = Blueprint("nmap_scan", __name__)
 
-# NOTE: Add this to backend/app.py:
-# from routes.nmap_scan import nmap_scan
-# app.register_blueprint(nmap_scan, url_prefix="/api/nmap-scan")
-
 def parse_nmap_output(output):
     """
     Parse nmap output and categorize devices.
