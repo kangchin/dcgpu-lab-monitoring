@@ -3,9 +3,13 @@ import re
 import subprocess
 from flask import Blueprint, jsonify
 from utils.models.systems import Systems
-from utils.models.pdu import Pdu
+from utils.models.pdu import PDU
 
 nmap_scan = Blueprint("nmap_scan", __name__)
+
+# NOTE: Add this to backend/app.py:
+# from routes.nmap_scan import nmap_scan
+# app.register_blueprint(nmap_scan, url_prefix="/api/nmap-scan")
 
 def parse_nmap_output(output):
     """
@@ -82,16 +86,22 @@ def parse_nmap_output(output):
     return devices
 
 def categorize_device(devices, ip, hostname):
-    """Categorize a device based on its hostname."""
+    """
+    Categorize a device based on its hostname.
+    - Systems: hostname contains "bmc" (case-insensitive)
+    - PDUs: hostname contains "pdu" (case-insensitive)
+    - Non-standard: has hostname but doesn't contain "bmc" or "pdu"
+    """
     hostname_lower = hostname.lower() if hostname else ""
     
     device_info = {"ip": ip, "hostname": hostname}
     
-    if hostname_lower.startswith("bmc-"):
+    if "bmc" in hostname_lower:
         devices["systems"].append(device_info)
-    elif hostname_lower.startswith("pdu-"):
+    elif "pdu" in hostname_lower:
         devices["pdus"].append(device_info)
     else:
+        # Has hostname but doesn't contain "bmc" or "pdu"
         devices["non_standard"].append(device_info)
 
 def compare_with_database(scanned_devices):
@@ -101,7 +111,7 @@ def compare_with_database(scanned_devices):
     """
     # Fetch tracked systems and PDUs from database
     systems_model = Systems()
-    pdu_model = Pdu()
+    pdu_model = PDU()
     
     tracked_systems = systems_model.find({})
     tracked_pdus = pdu_model.find({})
@@ -208,7 +218,30 @@ def run_nmap_scan():
     Execute nmap scan and return categorized results with database comparison.
     """
     try:
-        print("Starting nmap scan...")
+        print("="*60)
+        print("NMAP SCAN STARTED")
+        print("="*60)
+        
+        # Check if nmap is available first
+        try:
+            check_result = subprocess.run(
+                ["which", "nmap"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if check_result.returncode != 0:
+                print("ERROR: nmap command not found in system PATH")
+                return jsonify({
+                    "status": "error",
+                    "message": "Nmap is not installed on the server. Please install nmap package."
+                }), 500
+        except Exception as e:
+            print(f"ERROR: Could not check for nmap: {e}")
+            return jsonify({
+                "status": "error",
+                "message": f"Could not verify nmap installation: {str(e)}"
+            }), 500
         
         # Define network ranges to scan
         networks = [
@@ -224,6 +257,7 @@ def run_nmap_scan():
         cmd = ["nmap", "-sn"] + networks
         
         print(f"Executing: {' '.join(cmd)}")
+        print("This may take several minutes...")
         
         # Execute nmap with timeout
         result = subprocess.run(
@@ -233,25 +267,66 @@ def run_nmap_scan():
             timeout=300  # 5 minute timeout
         )
         
+        print(f"Nmap exit code: {result.returncode}")
+        
         if result.returncode != 0:
+            print(f"STDERR: {result.stderr}")
             return jsonify({
                 "status": "error",
-                "message": f"Nmap command failed: {result.stderr}"
+                "message": f"Nmap command failed with exit code {result.returncode}: {result.stderr}"
             }), 500
         
-        print("Nmap scan completed, parsing output...")
+        print("Nmap scan completed successfully")
+        print(f"Output length: {len(result.stdout)} characters")
         
         # Parse nmap output
-        scanned_devices = parse_nmap_output(result.stdout)
-        
-        print(f"Found {len(scanned_devices['systems'])} systems, "
-              f"{len(scanned_devices['pdus'])} PDUs, "
-              f"{len(scanned_devices['non_standard'])} non-standard, "
-              f"{len(scanned_devices['no_hostname'])} no hostname")
+        print("Parsing nmap output...")
+        try:
+            scanned_devices = parse_nmap_output(result.stdout)
+            
+            print(f"Parsing complete:")
+            print(f"  - Systems (BMC): {len(scanned_devices['systems'])}")
+            print(f"  - PDUs: {len(scanned_devices['pdus'])}")
+            print(f"  - Non-standard: {len(scanned_devices['non_standard'])}")
+            print(f"  - No hostname: {len(scanned_devices['no_hostname'])}")
+            
+            # Print sample devices from each category for debugging
+            if scanned_devices['systems']:
+                print(f"  Sample system: {scanned_devices['systems'][0]}")
+            if scanned_devices['pdus']:
+                print(f"  Sample PDU: {scanned_devices['pdus'][0]}")
+            if scanned_devices['non_standard']:
+                print(f"  Sample non-standard: {scanned_devices['non_standard'][0]}")
+            if scanned_devices['no_hostname']:
+                print(f"  Sample no hostname: {scanned_devices['no_hostname'][0]}")
+            
+        except Exception as e:
+            print(f"ERROR parsing nmap output: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to parse nmap output: {str(e)}"
+            }), 500
         
         # Compare with database
         print("Comparing with database...")
-        analysis = compare_with_database(scanned_devices)
+        try:
+            analysis = compare_with_database(scanned_devices)
+            print("Database comparison complete")
+            
+        except Exception as e:
+            print(f"ERROR comparing with database: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                "status": "error",
+                "message": f"Failed to compare with database: {str(e)}"
+            }), 500
+        
+        print("="*60)
+        print("NMAP SCAN COMPLETED SUCCESSFULLY")
+        print("="*60)
         
         return jsonify({
             "status": "success",
@@ -271,22 +346,24 @@ def run_nmap_scan():
         })
         
     except subprocess.TimeoutExpired:
+        print("ERROR: Nmap scan timed out")
         return jsonify({
             "status": "error",
             "message": "Nmap scan timed out after 5 minutes"
         }), 500
-    except FileNotFoundError:
+    except FileNotFoundError as e:
+        print(f"ERROR: Command not found - {e}")
         return jsonify({
             "status": "error", 
             "message": "Nmap command not found. Please install nmap package."
         }), 500
     except Exception as e:
-        print(f"Error in nmap scan: {e}")
+        print(f"UNEXPECTED ERROR in nmap scan: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
             "status": "error",
-            "message": str(e)
+            "message": f"Unexpected error: {str(e)}"
         }), 500
 
 @nmap_scan.route("/scan/status", methods=["GET"])
