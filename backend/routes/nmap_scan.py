@@ -3,13 +3,9 @@ import re
 import subprocess
 from flask import Blueprint, jsonify
 from utils.models.systems import Systems
-from utils.models.pdu import PDU
+from utils.models.pdu import Pdu
 
 nmap_scan = Blueprint("nmap_scan", __name__)
-
-# NOTE: Add this to backend/app.py:
-# from routes.nmap_scan import nmap_scan
-# app.register_blueprint(nmap_scan, url_prefix="/api/nmap-scan")
 
 def parse_nmap_output(output):
     """
@@ -111,7 +107,7 @@ def compare_with_database(scanned_devices):
     """
     # Fetch tracked systems and PDUs from database
     systems_model = Systems()
-    pdu_model = PDU()
+    pdu_model = Pdu()
     
     tracked_systems = systems_model.find({})
     tracked_pdus = pdu_model.find({})
