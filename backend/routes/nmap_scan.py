@@ -10,7 +10,14 @@ nmap_scan = Blueprint("nmap_scan", __name__)
 def parse_nmap_output(output):
     """
     Parse nmap output and categorize devices.
-    Returns dict with categorized devices.
+    Only processes hosts that are actually up (not all 1536 IPs).
+    
+    Example nmap output:
+    Nmap scan report for pdu-odcdh2-b01-1.amd.com (10.145.71.8)
+    Host is up (0.00067s latency).
+    
+    Nmap scan report for 10.145.71.100
+    Host is up (0.00050s latency).
     """
     devices = {
         "systems": [],
@@ -19,17 +26,25 @@ def parse_nmap_output(output):
         "no_hostname": []
     }
     
+    print("DEBUG: Starting to parse nmap output...")
+    print(f"DEBUG: Output length: {len(output)} characters")
+    
     # Parse nmap output line by line
     lines = output.split('\n')
+    print(f"DEBUG: Total lines: {len(lines)}")
+    
     current_ip = None
     current_hostname = None
     host_is_up = False
+    processed_count = 0
     
-    for line in lines:
+    for i, line in enumerate(lines):
+        line = line.strip()
+        
         # Match lines with hostname and IP: "Nmap scan report for hostname.domain (10.145.71.1)"
         hostname_match = re.search(r'Nmap scan report for ([^\s]+) \((\d+\.\d+\.\d+\.\d+)\)', line)
         if hostname_match:
-            # Process previous device if exists
+            # Process previous device if exists and was up
             if current_ip and host_is_up:
                 if current_hostname:
                     categorize_device(devices, current_ip, current_hostname)
@@ -38,17 +53,19 @@ def parse_nmap_output(output):
                         "ip": current_ip,
                         "hostname": None
                     })
+                processed_count += 1
             
             # New device with hostname
             current_hostname = hostname_match.group(1)
             current_ip = hostname_match.group(2)
             host_is_up = False
+            #print(f"DEBUG: Found device with hostname: {current_hostname} ({current_ip})")
             continue
         
         # Match lines with only IP: "Nmap scan report for 10.145.71.1"
-        ip_match = re.search(r'Nmap scan report for (\d+\.\d+\.\d+\.\d+)', line)
-        if ip_match:
-            # Process previous device if exists
+        ip_only_match = re.search(r'Nmap scan report for (\d+\.\d+\.\d+\.\d+)', line)
+        if ip_only_match and not hostname_match:  # Make sure it's not already matched above
+            # Process previous device if exists and was up
             if current_ip and host_is_up:
                 if current_hostname:
                     categorize_device(devices, current_ip, current_hostname)
@@ -57,19 +74,22 @@ def parse_nmap_output(output):
                         "ip": current_ip,
                         "hostname": None
                     })
+                processed_count += 1
             
             # New device without hostname
-            current_ip = ip_match.group(1)
+            current_ip = ip_only_match.group(1)
             current_hostname = None
             host_is_up = False
+            #print(f"DEBUG: Found device without hostname: {current_ip}")
             continue
         
         # Check for "Host is up" to confirm device is reachable
-        if "Host is up" in line:
+        if "Host is up" in line and current_ip:
             host_is_up = True
+            #print(f"DEBUG: Host is up: {current_ip}")
             continue
     
-    # Process last device
+    # Process last device if it was up
     if current_ip and host_is_up:
         if current_hostname:
             categorize_device(devices, current_ip, current_hostname)
@@ -78,6 +98,10 @@ def parse_nmap_output(output):
                 "ip": current_ip,
                 "hostname": None
             })
+        processed_count += 1
+    
+    print(f"DEBUG: Processed {processed_count} hosts that were up")
+    print(f"DEBUG: Systems: {len(devices['systems'])}, PDUs: {len(devices['pdus'])}, Non-standard: {len(devices['non_standard'])}, No hostname: {len(devices['no_hostname'])}")
     
     return devices
 
@@ -94,17 +118,22 @@ def categorize_device(devices, ip, hostname):
     
     if "bmc" in hostname_lower:
         devices["systems"].append(device_info)
+        print(f"DEBUG: Categorized as SYSTEM: {hostname}")
     elif "pdu" in hostname_lower:
         devices["pdus"].append(device_info)
+        print(f"DEBUG: Categorized as PDU: {hostname}")
     else:
         # Has hostname but doesn't contain "bmc" or "pdu"
         devices["non_standard"].append(device_info)
+        print(f"DEBUG: Categorized as NON-STANDARD: {hostname}")
 
 def compare_with_database(scanned_devices):
     """
     Compare scanned devices with database records.
     Returns analysis of new devices, changed IPs, and possible resets.
     """
+    print("DEBUG: Starting database comparison...")
+    
     # Fetch tracked systems and PDUs from database
     systems_model = Systems()
     pdu_model = Pdu()
@@ -112,12 +141,15 @@ def compare_with_database(scanned_devices):
     tracked_systems = systems_model.find({})
     tracked_pdus = pdu_model.find({})
     
+    print(f"DEBUG: Found {len(tracked_systems)} tracked systems in database")
+    print(f"DEBUG: Found {len(tracked_pdus)} tracked PDUs in database")
+    
     # Create lookup dictionaries
     systems_by_hostname = {s.get("system", "").lower(): s for s in tracked_systems}
     systems_by_ip = {s.get("bmc_ip", ""): s for s in tracked_systems if s.get("bmc_ip")}
     
     pdus_by_hostname = {p.get("hostname", "").lower(): p for p in tracked_pdus}
-    pdus_by_ip = {p.get("hostname", ""): p for p in tracked_pdus}  # PDU uses hostname field for IP in some cases
+    pdus_by_ip = {p.get("hostname", ""): p for p in tracked_pdus}
     
     analysis = {
         "new_systems": [],
@@ -137,6 +169,7 @@ def compare_with_database(scanned_devices):
         if hostname not in systems_by_hostname:
             # New system (hostname not in database)
             analysis["new_systems"].append(device)
+            print(f"DEBUG: NEW SYSTEM found: {hostname}")
         else:
             # Known system - check if IP changed
             tracked_system = systems_by_hostname[hostname]
@@ -149,6 +182,7 @@ def compare_with_database(scanned_devices):
                     "new_ip": ip,
                     "system_data": tracked_system
                 })
+                print(f"DEBUG: SYSTEM IP CHANGED: {hostname} from {tracked_ip} to {ip}")
     
     # Check for possible system resets (non-standard hostname with tracked IP)
     for device in scanned_devices["non_standard"]:
@@ -161,6 +195,7 @@ def compare_with_database(scanned_devices):
                 "expected_hostname": tracked_system.get("system"),
                 "system_data": tracked_system
             })
+            print(f"DEBUG: POSSIBLE SYSTEM RESET: {ip} has hostname {device['hostname']}, expected {tracked_system.get('system')}")
     
     # Check no_hostname devices for tracked IPs
     for device in scanned_devices["no_hostname"]:
@@ -173,6 +208,7 @@ def compare_with_database(scanned_devices):
                 "expected_hostname": tracked_system.get("system"),
                 "system_data": tracked_system
             })
+            print(f"DEBUG: POSSIBLE SYSTEM RESET: {ip} has no hostname, expected {tracked_system.get('system')}")
     
     # Analyze PDUs
     for device in scanned_devices["pdus"]:
@@ -183,28 +219,9 @@ def compare_with_database(scanned_devices):
         if hostname not in pdus_by_hostname:
             # New PDU (hostname not in database)
             analysis["new_pdus"].append(device)
-        else:
-            # Known PDU - check if IP changed
-            tracked_pdu = pdus_by_hostname[hostname]
-            # PDUs might store IP in hostname field or have it embedded
-            # Extract IP from hostname if it follows pattern
-            tracked_hostname = tracked_pdu.get("hostname", "")
-            
-            # Try to resolve tracked PDU IP (might need DNS lookup or stored field)
-            # For now, we'll skip IP change detection for PDUs if not directly stored
-            # You can enhance this based on your PDU data structure
+            print(f"DEBUG: NEW PDU found: {hostname}")
     
-    # Check for possible PDU resets
-    for device in scanned_devices["non_standard"]:
-        hostname_lower = device["hostname"].lower()
-        # Check if this might be a reset PDU (has pdu-like IP or was previously tracked)
-        # This is a heuristic - you may need to adjust based on your network
-        if any(pdu_hostname in hostname_lower for pdu_hostname in pdus_by_hostname.keys()):
-            analysis["possible_pdu_resets"].append({
-                "current_hostname": device["hostname"],
-                "ip": device["ip"],
-                "note": "Non-standard hostname but may be related to tracked PDU"
-            })
+    print(f"DEBUG: Analysis complete - New systems: {len(analysis['new_systems'])}, New PDUs: {len(analysis['new_pdus'])}")
     
     return analysis
 
@@ -263,6 +280,9 @@ def run_nmap_scan():
             timeout=300  # 5 minute timeout
         )
         
+        if "Host discovery disabled" in result.stderr:
+            print("WARNING: Nmap running without raw socket access")
+        print(result)
         print(f"Nmap exit code: {result.returncode}")
         
         if result.returncode != 0:

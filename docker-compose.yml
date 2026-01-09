@@ -33,6 +33,9 @@ services:
     depends_on:
       - mongodb
       - redis
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=Host(`dcgpu-lab.amd.com`) && PathPrefix(`/api/`)"
