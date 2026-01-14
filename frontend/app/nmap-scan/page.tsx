@@ -202,7 +202,7 @@ export default function NmapScanPage() {
                 <CardContent className="p-4 text-center">
                   <Activity className="h-6 w-6 text-blue-600 mx-auto mb-2" />
                   <div className="text-2xl font-bold text-blue-800 dark:text-blue-200">
-                    {scanResult.summary.total_devices}
+                    {scanResult.summary?.total_devices ?? 0}
                   </div>
                   <div className="text-sm text-blue-600 dark:text-blue-400">Total Devices</div>
                 </CardContent>
@@ -212,7 +212,7 @@ export default function NmapScanPage() {
                 <CardContent className="p-4 text-center">
                   <Server className="h-6 w-6 text-green-600 mx-auto mb-2" />
                   <div className="text-2xl font-bold text-green-800 dark:text-green-200">
-                    {scanResult.summary.systems}
+                    {scanResult.summary?.systems ?? 0}
                   </div>
                   <div className="text-sm text-green-600 dark:text-green-400">Systems (BMC)</div>
                 </CardContent>
@@ -222,7 +222,7 @@ export default function NmapScanPage() {
                 <CardContent className="p-4 text-center">
                   <Zap className="h-6 w-6 text-purple-600 mx-auto mb-2" />
                   <div className="text-2xl font-bold text-purple-800 dark:text-purple-200">
-                    {scanResult.summary.pdus}
+                    {scanResult.summary?.pdus ?? 0}
                   </div>
                   <div className="text-sm text-purple-600 dark:text-purple-400">PDUs</div>
                 </CardContent>
@@ -232,8 +232,10 @@ export default function NmapScanPage() {
                 <CardContent className="p-4 text-center">
                   <AlertTriangle className="h-6 w-6 text-amber-600 mx-auto mb-2" />
                   <div className="text-2xl font-bold text-amber-800 dark:text-amber-200">
-                    {scanResult.summary.new_systems + scanResult.summary.new_pdus + 
-                     scanResult.summary.changed_ips + scanResult.summary.possible_resets}
+                    {((scanResult.summary?.new_systems ?? 0) + 
+                      (scanResult.summary?.new_pdus ?? 0) + 
+                      (scanResult.summary?.changed_ips ?? 0) + 
+                      (scanResult.summary?.possible_resets ?? 0))}
                   </div>
                   <div className="text-sm text-amber-600 dark:text-amber-400">Issues Found</div>
                 </CardContent>
@@ -241,7 +243,8 @@ export default function NmapScanPage() {
             </div>
 
             {/* New Devices */}
-            {(scanResult.analysis.new_systems.length > 0 || scanResult.analysis.new_pdus.length > 0) && (
+            {((scanResult.analysis?.new_systems?.length ?? 0) > 0 || 
+              (scanResult.analysis?.new_pdus?.length ?? 0) > 0) && (
               <Card className="border-green-200 bg-green-50 dark:bg-green-950/20">
                 <CardHeader>
                   <CardTitle className="text-green-700 dark:text-green-300 flex items-center gap-2">
@@ -251,9 +254,11 @@ export default function NmapScanPage() {
                   <CardDescription>Devices not found in the database</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  {scanResult.analysis.new_systems.length > 0 && (
+                  {(scanResult.analysis?.new_systems?.length ?? 0) > 0 && (
                     <>
-                      <h3 className="font-semibold mb-2">New Systems ({scanResult.analysis.new_systems.length})</h3>
+                      <h3 className="font-semibold mb-2">
+                        New Systems ({scanResult.analysis.new_systems.length})
+                      </h3>
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -272,9 +277,11 @@ export default function NmapScanPage() {
                       </Table>
                     </>
                   )}
-                  {scanResult.analysis.new_pdus.length > 0 && (
+                  {(scanResult.analysis?.new_pdus?.length ?? 0) > 0 && (
                     <>
-                      <h3 className="font-semibold mb-2 mt-4">New PDUs ({scanResult.analysis.new_pdus.length})</h3>
+                      <h3 className="font-semibold mb-2 mt-4">
+                        New PDUs ({scanResult.analysis.new_pdus.length})
+                      </h3>
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -298,7 +305,7 @@ export default function NmapScanPage() {
             )}
 
             {/* Changed IPs */}
-            {scanResult.analysis.changed_system_ips.length > 0 && (
+            {(scanResult.analysis?.changed_system_ips?.length ?? 0) > 0 && (
               <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
                 <CardHeader>
                   <CardTitle className="text-amber-700 dark:text-amber-300 flex items-center gap-2">
@@ -331,7 +338,7 @@ export default function NmapScanPage() {
             )}
 
             {/* Possible Resets */}
-            {scanResult.analysis.possible_system_resets.length > 0 && (
+            {(scanResult.analysis?.possible_system_resets?.length ?? 0) > 0 && (
               <Card className="border-red-200 bg-red-50 dark:bg-red-950/20">
                 <CardHeader>
                   <CardTitle className="text-red-700 dark:text-red-300 flex items-center gap-2">
@@ -373,9 +380,11 @@ export default function NmapScanPage() {
               </CardHeader>
               <CardContent className="space-y-6">
                 {/* Systems */}
-                {scanResult.scanned_devices.systems.length > 0 && (
+                {(scanResult.scanned_devices?.systems?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">Systems ({scanResult.scanned_devices.systems.length})</h3>
+                    <h3 className="font-semibold">
+                      Systems ({scanResult.scanned_devices.systems.length})
+                    </h3>
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -396,9 +405,11 @@ export default function NmapScanPage() {
                 )}
 
                 {/* PDUs */}
-                {scanResult.scanned_devices.pdus.length > 0 && (
+                {(scanResult.scanned_devices?.pdus?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">PDUs ({scanResult.scanned_devices.pdus.length})</h3>
+                    <h3 className="font-semibold">
+                      PDUs ({scanResult.scanned_devices.pdus.length})
+                    </h3>
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -419,9 +430,11 @@ export default function NmapScanPage() {
                 )}
 
                 {/* Non-standard */}
-                {scanResult.scanned_devices.non_standard.length > 0 && (
+                {(scanResult.scanned_devices?.non_standard?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">Non-Standard Hostnames ({scanResult.scanned_devices.non_standard.length})</h3>
+                    <h3 className="font-semibold">
+                      Non-Standard Hostnames ({scanResult.scanned_devices.non_standard.length})
+                    </h3>
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -442,9 +455,11 @@ export default function NmapScanPage() {
                 )}
 
                 {/* No hostname */}
-                {scanResult.scanned_devices.no_hostname.length > 0 && (
+                {(scanResult.scanned_devices?.no_hostname?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">No Hostname ({scanResult.scanned_devices.no_hostname.length})</h3>
+                    <h3 className="font-semibold">
+                      No Hostname ({scanResult.scanned_devices.no_hostname.length})
+                    </h3>
                     <Table>
                       <TableHeader>
                         <TableRow>

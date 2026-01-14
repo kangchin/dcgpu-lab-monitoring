@@ -2,7 +2,7 @@ from utils.factory.validation import Validator
 from utils.factory.database import Database
 
 
-class Pdu(object):
+class PDU(object):
     def __init__(self):
         self.validator = Validator()
         self.db = Database()

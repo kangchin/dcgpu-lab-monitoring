@@ -30,12 +30,14 @@ services:
       - ./backend/.env
     volumes:
       - ./backend/data:/app/data
-    depends_on:
-      - mongodb
-      - redis
+    # Linux-specific: Use host network for nmap to access LAN
+    network_mode: ${NETWORK_MODE:-bridge}
     cap_add:
       - NET_RAW
       - NET_ADMIN
+    depends_on:
+      - mongodb
+      - redis
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.backend.rule=Host(`dcgpu-lab.amd.com`) && PathPrefix(`/api/`)"
