@@ -985,7 +985,7 @@ def fetch_power_data():
         
         # Try to acquire lock
         lock_key = "celery:lock:fetch_power_data"
-        lock_acquired = r.set(lock_key, "locked", nx=True, ex=600)
+        lock_acquired = r.set(lock_key, "locked", nx=True, ex=1200)
         
         if not lock_acquired:
             print("⏭️  SKIPPING power fetch: Lock already held by another worker")

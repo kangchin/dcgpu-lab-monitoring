@@ -1,0 +1,3 @@
+If your computer's OS is Windows, run "setup-windows.ps1" to install nmap. 
+Then, uncomment "network_mode: ${NETWORK_MODE:-bridge}" from docker-compose.yml 
+[even if Docker is using Linux, this step is still needed as the code needs the computer to do the nmap scan and not the VM(docker)]
