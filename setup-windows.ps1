@@ -83,19 +83,6 @@ try {
 $env:NMAP_EXE = $nmapExe
 
 # -------------------------------------------------
-# Write .env.platform
-# -------------------------------------------------
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$envPath = Join-Path $scriptDir ".env.platform"
-
-try {
-    "NETWORK_MODE=bridge" | Out-File $envPath -Encoding ASCII -Force
-    Write-Host "[OK] Created .env.platform at: $envPath" -ForegroundColor Green
-} catch {
-    Write-Warning "Failed to create .env.platform: $_"
-}
-
-# -------------------------------------------------
 # Footer
 # -------------------------------------------------
 Write-Host ""
