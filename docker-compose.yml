@@ -30,6 +30,7 @@ services:
       - ./backend/.env
     volumes:
       - ./backend/data:/app/data
+    # Linux-specific: Use host network for nmap to access LAN
     #network_mode: ${NETWORK_MODE:-bridge}
     cap_add:
       - NET_RAW

@@ -75,6 +75,47 @@ interface ScanResult {
   };
 }
 
+
+import { ChevronDown } from "lucide-react";
+
+function CollapsibleSection({
+  header,
+  children,
+}: {
+  header: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="
+          flex w-full items-center justify-between
+          rounded-md px-2 py-1
+          text-left
+          hover:bg-muted
+          transition-colors
+          cursor-pointer
+        "
+      >
+        <div>{header}</div>
+
+        <ChevronDown
+          className={`h-4 w-4 text-muted-foreground transition-transform ${
+            open ? "rotate-180" : ""
+          }`}
+        />
+      </button>
+
+      {open && <div className="pl-2">{children}</div>}
+    </div>
+  );
+}
+
+
 export default function NmapScanPage() {
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
@@ -148,6 +189,7 @@ export default function NmapScanPage() {
                     Nmap Not Available
                   </p>
                   <p className="text-sm text-red-600 dark:text-red-400">
+                    Ensure scanner_service.py is running if on Windows.
                     The nmap tool is not installed on the server. Please install it to use this feature.
                   </p>
                 </div>
@@ -312,7 +354,7 @@ export default function NmapScanPage() {
                     <AlertTriangle className="h-5 w-5" />
                     IP Address Changes
                   </CardTitle>
-                  <CardDescription>Tracked devices with different IP addresses</CardDescription>
+                  <CardDescription>Tracked devices with different BMC IP addresses</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <Table>
@@ -382,9 +424,13 @@ export default function NmapScanPage() {
                 {/* Systems */}
                 {(scanResult.scanned_devices?.systems?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">
-                      Systems ({scanResult.scanned_devices.systems.length})
-                    </h3>
+                  <CollapsibleSection
+                    header={
+                      <h3 className="font-semibold">
+                        Systems ({scanResult.scanned_devices.systems.length})
+                      </h3>
+                    }
+                  >
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -401,15 +447,20 @@ export default function NmapScanPage() {
                         ))}
                       </TableBody>
                     </Table>
+                    </CollapsibleSection>
                   </>
                 )}
 
                 {/* PDUs */}
                 {(scanResult.scanned_devices?.pdus?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">
-                      PDUs ({scanResult.scanned_devices.pdus.length})
-                    </h3>
+                    <CollapsibleSection
+                      header={
+                        <h3 className="font-semibold">
+                          PDUs ({scanResult.scanned_devices.pdus.length})
+                        </h3>
+                      }
+                    >
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -426,15 +477,20 @@ export default function NmapScanPage() {
                         ))}
                       </TableBody>
                     </Table>
+                    </CollapsibleSection>
                   </>
                 )}
 
                 {/* Non-standard */}
                 {(scanResult.scanned_devices?.non_standard?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">
-                      Non-Standard Hostnames ({scanResult.scanned_devices.non_standard.length})
-                    </h3>
+                  <CollapsibleSection
+                    header={
+                      <h3 className="font-semibold">
+                        Non-Standard Hostnames ({scanResult.scanned_devices.non_standard.length})
+                      </h3>
+                    }
+                  >
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -451,15 +507,20 @@ export default function NmapScanPage() {
                         ))}
                       </TableBody>
                     </Table>
+                    </CollapsibleSection>
                   </>
                 )}
 
                 {/* No hostname */}
                 {(scanResult.scanned_devices?.no_hostname?.length ?? 0) > 0 && (
                   <>
-                    <h3 className="font-semibold">
-                      No Hostname ({scanResult.scanned_devices.no_hostname.length})
-                    </h3>
+                  <CollapsibleSection
+                    header={
+                      <h3 className="font-semibold">
+                        No Hostname ({scanResult.scanned_devices.no_hostname.length})
+                      </h3>
+                    }
+                  >
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -474,6 +535,7 @@ export default function NmapScanPage() {
                         ))}
                       </TableBody>
                     </Table>
+                    </CollapsibleSection>
                   </>
                 )}
               </CardContent>
