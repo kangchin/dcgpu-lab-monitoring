@@ -21,6 +21,7 @@ import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { usePathname } from "next/navigation";
+import { Play } from "lucide-react";
 
 // Menu items.
 const items = [
@@ -40,6 +41,12 @@ const items = [
     title: "Nmap Scan",
     url: "/nmap-scan",
     icon: Radar,
+    activeIndicator: "",
+  },
+  {
+    title: "Macros",
+    url: "/macros",
+    icon: Play,
     activeIndicator: "",
   },
   {
