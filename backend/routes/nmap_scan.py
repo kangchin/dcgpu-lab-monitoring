@@ -33,6 +33,16 @@ def require_admin_password(f):
     return decorated_function
 
 
+
+@nmap_scan.route("/validate-password", methods=["POST"])
+def validate_password():
+    """Validate admin password for the frontend lock/unlock mechanism"""
+    password = request.json.get("admin_password") if request.json else None
+    if not password or password != ADMIN_PASSWORD:
+        return jsonify({"status": "error", "message": "Invalid admin password"}), 401
+    return jsonify({"status": "success"})
+
+
 # -------------------------------------------------------------------
 # Scanner service helpers (Windows Docker support)
 # -------------------------------------------------------------------

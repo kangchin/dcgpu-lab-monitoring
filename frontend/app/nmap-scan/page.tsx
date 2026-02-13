@@ -28,9 +28,11 @@ import {
   Ban,
   Plus,
   History,
+  Lock,
+  Unlock,
 } from "lucide-react";
 
-// ── Plain Modal (replaces shadcn Dialog) ─────────────────────────────────────
+// ── Plain Modal ───────────────────────────────────────────────────────────────
 function Modal({
   open,
   onClose,
@@ -47,12 +49,7 @@ function Modal({
   if (!open) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      {/* backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={onClose}
-      />
-      {/* panel */}
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative z-10 w-full max-w-md max-h-[90vh] overflow-y-auto rounded-lg bg-white dark:bg-gray-900 p-6 shadow-xl space-y-4">
         <div>
           <h2 className="text-lg font-semibold">{title}</h2>
@@ -66,7 +63,7 @@ function Modal({
   );
 }
 
-// ── Plain Tabs (replaces shadcn Tabs) ─────────────────────────────────────────
+// ── Plain Tabs ────────────────────────────────────────────────────────────────
 function Tabs({
   tabs,
   children,
@@ -105,13 +102,19 @@ export default function NmapScanPage() {
   const [error, setError] = useState<string>();
   const [scannerStatus, setScannerStatus] = useState<any>(null);
 
-  // Dialog states
+  // ── Admin lock state ────────────────────────────────────────────────────────
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [lockPasswordInput, setLockPasswordInput] = useState("");
+  const [lockError, setLockError] = useState("");
+  const [showLockModal, setShowLockModal] = useState(false);
+
+  // ── Dialog states ───────────────────────────────────────────────────────────
   const [updateDialog, setUpdateDialog] = useState<any>(null);
   const [createDialog, setCreateDialog] = useState<any>(null);
   const [ignoreDialog, setIgnoreDialog] = useState<any>(null);
-  const [adminPassword, setAdminPassword] = useState("");
 
-  // Change logs and ignored devices
+  // ── Data ────────────────────────────────────────────────────────────────────
   const [changeLogs, setChangeLogs] = useState<any[]>([]);
   const [ignoredDevices, setIgnoredDevices] = useState<any[]>([]);
 
@@ -121,6 +124,32 @@ export default function NmapScanPage() {
     fetchIgnoredDevices();
   }, []);
 
+  // ── Lock / Unlock ───────────────────────────────────────────────────────────
+  const handleUnlock = async () => {
+    setLockError("");
+    try {
+      await axios.post(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/validate-password`,
+        { admin_password: lockPasswordInput }
+      );
+      setAdminPassword(lockPasswordInput);
+      setLockPasswordInput("");
+      setIsUnlocked(true);
+      setShowLockModal(false);
+    } catch (e: any) {
+      setLockError(e.response?.data?.message || "Invalid password");
+    }
+  };
+
+  const handleLock = () => {
+    setIsUnlocked(false);
+    setAdminPassword("");
+    setLockPasswordInput("");
+    setLockError("");
+    closeDialogs();
+  };
+
+  // ── Scan ────────────────────────────────────────────────────────────────────
   const checkScannerStatus = async () => {
     try {
       const response = await axios.get(
@@ -177,11 +206,11 @@ export default function NmapScanPage() {
     setUpdateDialog(null);
     setCreateDialog(null);
     setIgnoreDialog(null);
-    setAdminPassword("");
   };
 
+  // ── Actions ─────────────────────────────────────────────────────────────────
   const handleUpdateSystem = async () => {
-    if (!updateDialog || !adminPassword) return;
+    if (!updateDialog) return;
     try {
       const response = await axios.post(
         `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/update-system`,
@@ -192,7 +221,6 @@ export default function NmapScanPage() {
           new_ip: updateDialog.new_ip,
           admin_password: adminPassword,
           admin_user: "admin",
-          reason: updateDialog.reason || "",
         }
       );
       if (response.data.status === "success") {
@@ -207,7 +235,7 @@ export default function NmapScanPage() {
   };
 
   const handleCreateSystem = async () => {
-    if (!createDialog || !adminPassword) return;
+    if (!createDialog) return;
     try {
       const response = await axios.post(
         `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/create-system`,
@@ -220,7 +248,6 @@ export default function NmapScanPage() {
           password: createDialog.password,
           admin_password: adminPassword,
           admin_user: "admin",
-          reason: createDialog.reason || "",
         }
       );
       if (response.data.status === "success") {
@@ -235,7 +262,7 @@ export default function NmapScanPage() {
   };
 
   const handleCreatePDU = async () => {
-    if (!createDialog || !adminPassword) return;
+    if (!createDialog) return;
     try {
       const response = await axios.post(
         `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/create-pdu`,
@@ -245,10 +272,9 @@ export default function NmapScanPage() {
           site: createDialog.site || "",
           location: createDialog.location || "",
           output_power_total_oid: createDialog.output_power_total_oid || "",
-          v2c: createDialog.v2c || "amd123",
+          v2c: "amd123",
           admin_password: adminPassword,
           admin_user: "admin",
-          reason: createDialog.reason || "",
         }
       );
       if (response.data.status === "success") {
@@ -263,14 +289,13 @@ export default function NmapScanPage() {
   };
 
   const handleIgnoreDevice = async () => {
-    if (!ignoreDialog || !adminPassword) return;
+    if (!ignoreDialog) return;
     try {
       const response = await axios.post(
         `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/ignore-device`,
         {
           hostname: ignoreDialog.hostname,
           device_type: ignoreDialog.device_type,
-          reason: ignoreDialog.reason || "",
           admin_password: adminPassword,
           admin_user: "admin",
         }
@@ -288,12 +313,10 @@ export default function NmapScanPage() {
 
   const handleUnignoreDevice = async (deviceId: string) => {
     if (!confirm("Remove this device from the ignored list?")) return;
-    const password = prompt("Enter admin password:");
-    if (!password) return;
     try {
       const response = await axios.delete(
         `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/unignore-device/${deviceId}`,
-        { data: { admin_password: password } }
+        { data: { admin_password: adminPassword } }
       );
       if (response.data.status === "success") {
         alert("Device removed from ignored list!");
@@ -304,7 +327,7 @@ export default function NmapScanPage() {
     }
   };
 
-  // ── Shared form field helper ────────────────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────────────────────────────
   const Field = ({
     label,
     required,
@@ -334,22 +357,41 @@ export default function NmapScanPage() {
     disabled?: boolean;
   }) => (
     <div className="flex justify-end gap-2 pt-2">
-      <Button variant="outline" onClick={onCancel}>
-        Cancel
-      </Button>
-      <Button onClick={onConfirm} disabled={disabled}>
-        {confirmLabel}
-      </Button>
+      <Button variant="outline" onClick={onCancel}>Cancel</Button>
+      <Button onClick={onConfirm} disabled={disabled}>{confirmLabel}</Button>
     </div>
   );
 
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <main className="flex flex-col items-center justify-center min-h-screen w-full px-4">
       <div className="w-full max-w-7xl space-y-6">
-        <h1 className="text-4xl font-bold mb-4 flex items-center gap-3">
-          <Network className="h-10 w-10" />
-          Network Scanner
-        </h1>
+
+        {/* Header row with title + lock toggle */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-4xl font-bold flex items-center gap-3">
+            <Network className="h-10 w-10" />
+            Network Scanner
+          </h1>
+
+          {isUnlocked ? (
+            <button
+              onClick={handleLock}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50 transition-colors font-medium text-sm"
+            >
+              <Unlock className="h-4 w-4" />
+              Unlocked — Click to Lock
+            </button>
+          ) : (
+            <button
+              onClick={() => { setShowLockModal(true); setLockError(""); }}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:hover:bg-gray-700 transition-colors font-medium text-sm"
+            >
+              <Lock className="h-4 w-4" />
+              Locked
+            </button>
+          )}
+        </div>
 
         {/* Scanner Status */}
         <Card>
@@ -362,11 +404,7 @@ export default function NmapScanPage() {
               <div className="space-y-2">
                 <p>
                   Status:{" "}
-                  <span
-                    className={`font-bold ${
-                      scannerStatus.status === "available" ? "text-green-600" : "text-red-600"
-                    }`}
-                  >
+                  <span className={`font-bold ${scannerStatus.status === "available" ? "text-green-600" : "text-red-600"}`}>
                     {scannerStatus.status}
                   </span>
                 </p>
@@ -388,15 +426,9 @@ export default function NmapScanPage() {
           size="lg"
         >
           {scanning ? (
-            <>
-              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              Scanning Networks...
-            </>
+            <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Scanning Networks...</>
           ) : (
-            <>
-              <Network className="mr-2 h-4 w-4" />
-              Run Network Scan
-            </>
+            <><Network className="mr-2 h-4 w-4" />Run Network Scan</>
           )}
         </Button>
 
@@ -416,7 +448,7 @@ export default function NmapScanPage() {
           <Tabs tabs={["Analysis", "All Devices", "Change Logs", "Ignored Devices"]}>
             {(active) => (
               <>
-                {/* ── Analysis ─────────────────────────────────────────────── */}
+                {/* ── Analysis ──────────────────────────────────────────────── */}
                 {active === "Analysis" && (
                   <div className="space-y-4">
                     {/* New Systems */}
@@ -445,18 +477,16 @@ export default function NmapScanPage() {
                                   <TableCell className="space-x-2">
                                     <Button
                                       size="sm"
-                                      onClick={() =>
-                                        setCreateDialog({ hostname: device.hostname, ip: device.ip, type: "system" })
-                                      }
+                                      disabled={!isUnlocked}
+                                      onClick={() => setCreateDialog({ hostname: device.hostname, ip: device.ip, type: "system" })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Create
                                     </Button>
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      onClick={() =>
-                                        setIgnoreDialog({ hostname: device.hostname, device_type: "system" })
-                                      }
+                                      disabled={!isUnlocked}
+                                      onClick={() => setIgnoreDialog({ hostname: device.hostname, device_type: "system" })}
                                     >
                                       <Ban className="mr-1 h-3 w-3" /> Ignore
                                     </Button>
@@ -497,6 +527,7 @@ export default function NmapScanPage() {
                                   <TableCell className="space-x-2">
                                     <Button
                                       size="sm"
+                                      disabled={!isUnlocked}
                                       onClick={() => setUpdateDialog(change)}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Update
@@ -504,9 +535,8 @@ export default function NmapScanPage() {
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      onClick={() =>
-                                        setIgnoreDialog({ hostname: change.hostname, device_type: "system" })
-                                      }
+                                      disabled={!isUnlocked}
+                                      onClick={() => setIgnoreDialog({ hostname: change.hostname, device_type: "system" })}
                                     >
                                       <Ban className="mr-1 h-3 w-3" /> Ignore
                                     </Button>
@@ -545,18 +575,16 @@ export default function NmapScanPage() {
                                   <TableCell className="space-x-2">
                                     <Button
                                       size="sm"
-                                      onClick={() =>
-                                        setCreateDialog({ hostname: device.hostname, ip: device.ip, type: "pdu" })
-                                      }
+                                      disabled={!isUnlocked}
+                                      onClick={() => setCreateDialog({ hostname: device.hostname, ip: device.ip, type: "pdu" })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Create
                                     </Button>
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      onClick={() =>
-                                        setIgnoreDialog({ hostname: device.hostname, device_type: "pdu" })
-                                      }
+                                      disabled={!isUnlocked}
+                                      onClick={() => setIgnoreDialog({ hostname: device.hostname, device_type: "pdu" })}
                                     >
                                       <Ban className="mr-1 h-3 w-3" /> Ignore
                                     </Button>
@@ -585,21 +613,17 @@ export default function NmapScanPage() {
                   </div>
                 )}
 
-                {/* ── All Devices ───────────────────────────────────────────── */}
+                {/* ── All Devices ────────────────────────────────────────────── */}
                 {active === "All Devices" && (
                   <Card>
-                    <CardHeader>
-                      <CardTitle>All Scanned Devices</CardTitle>
-                    </CardHeader>
+                    <CardHeader><CardTitle>All Scanned Devices</CardTitle></CardHeader>
                     <CardContent>
                       <div className="space-y-4">
                         {Object.entries(scanData.scanned_devices).map(
                           ([category, devices]: [string, any]) =>
                             devices.length > 0 && (
                               <div key={category}>
-                                <h3 className="font-semibold mb-2 capitalize">
-                                  {category.replace("_", " ")}
-                                </h3>
+                                <h3 className="font-semibold mb-2 capitalize">{category.replace("_", " ")}</h3>
                                 <Table>
                                   <TableHeader>
                                     <TableRow>
@@ -624,7 +648,7 @@ export default function NmapScanPage() {
                   </Card>
                 )}
 
-                {/* ── Change Logs ───────────────────────────────────────────── */}
+                {/* ── Change Logs ────────────────────────────────────────────── */}
                 {active === "Change Logs" && (
                   <Card>
                     <CardHeader>
@@ -661,7 +685,7 @@ export default function NmapScanPage() {
                   </Card>
                 )}
 
-                {/* ── Ignored Devices ───────────────────────────────────────── */}
+                {/* ── Ignored Devices ────────────────────────────────────────── */}
                 {active === "Ignored Devices" && (
                   <Card>
                     <CardHeader>
@@ -677,7 +701,6 @@ export default function NmapScanPage() {
                           <TableRow>
                             <TableHead>Hostname</TableHead>
                             <TableHead>Type</TableHead>
-                            <TableHead>Reason</TableHead>
                             <TableHead>Ignored By</TableHead>
                             <TableHead>Date</TableHead>
                             <TableHead>Actions</TableHead>
@@ -688,13 +711,13 @@ export default function NmapScanPage() {
                             <TableRow key={device._id}>
                               <TableCell>{device.hostname}</TableCell>
                               <TableCell className="capitalize">{device.device_type}</TableCell>
-                              <TableCell>{device.reason || "N/A"}</TableCell>
                               <TableCell>{device.ignored_by}</TableCell>
                               <TableCell>{new Date(device.created).toLocaleString()}</TableCell>
                               <TableCell>
                                 <Button
                                   size="sm"
                                   variant="outline"
+                                  disabled={!isUnlocked}
                                   onClick={() => handleUnignoreDevice(device._id)}
                                 >
                                   <XCircle className="mr-1 h-3 w-3" /> Unignore
@@ -711,6 +734,41 @@ export default function NmapScanPage() {
             )}
           </Tabs>
         )}
+
+        {/* ── Unlock Modal ──────────────────────────────────────────────────── */}
+        <Modal
+          open={showLockModal}
+          onClose={() => { setShowLockModal(false); setLockError(""); setLockPasswordInput(""); }}
+          title="Admin Unlock"
+          description="Enter the admin password to enable changes"
+        >
+          <div className="space-y-3">
+            <Input
+              type="password"
+              placeholder="Admin password"
+              value={lockPasswordInput}
+              onChange={(e) => setLockPasswordInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleUnlock()}
+              autoFocus
+            />
+            {lockError && (
+              <p className="text-sm text-red-600 flex items-center gap-1">
+                <AlertTriangle className="h-3 w-3" /> {lockError}
+              </p>
+            )}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              onClick={() => { setShowLockModal(false); setLockError(""); setLockPasswordInput(""); }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleUnlock} disabled={!lockPasswordInput}>
+              <Unlock className="mr-2 h-4 w-4" /> Unlock
+            </Button>
+          </div>
+        </Modal>
 
         {/* ── Update System Modal ───────────────────────────────────────────── */}
         <Modal
@@ -729,20 +787,11 @@ export default function NmapScanPage() {
             <Field label="New IP">
               <Input value={updateDialog?.new_ip || ""} disabled />
             </Field>
-            <Field label="Admin Password" required>
-              <Input
-                type="password"
-                placeholder="Enter admin password"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-              />
-            </Field>
           </div>
           <ModalFooter
             onCancel={closeDialogs}
             onConfirm={handleUpdateSystem}
             confirmLabel="Update System"
-            disabled={!adminPassword}
           />
         </Modal>
 
@@ -797,41 +846,24 @@ export default function NmapScanPage() {
             )}
 
             {createDialog?.type === "pdu" && (
-              <>
-                <Field label="Output Power Total OID" required>
-                  <Input
-                    placeholder="1.3.6.1.4.1.850.1.1.3.2.2.1.1.9.1"
-                    onChange={(e) =>
-                      setCreateDialog({ ...createDialog, output_power_total_oid: e.target.value })
-                    }
-                  />
-                </Field>
-                <Field label="V2C Community String">
-                  <Input
-                    placeholder="amd123"
-                    defaultValue="amd123"
-                    onChange={(e) => setCreateDialog({ ...createDialog, v2c: e.target.value })}
-                  />
-                </Field>
-              </>
+              <Field label="Output Power Total OID" required>
+                <Input
+                  placeholder="1.3.6.1.4.1.850.1.1.3.2.2.1.1.9.1"
+                  onChange={(e) =>
+                    setCreateDialog({ ...createDialog, output_power_total_oid: e.target.value })
+                  }
+                />
+              </Field>
             )}
-
-            <Field label="Admin Password" required>
-              <Input
-                type="password"
-                placeholder="Enter admin password"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-              />
-            </Field>
           </div>
           <ModalFooter
             onCancel={closeDialogs}
             onConfirm={createDialog?.type === "system" ? handleCreateSystem : handleCreatePDU}
             confirmLabel={`Create ${createDialog?.type === "system" ? "System" : "PDU"}`}
             disabled={
-              !adminPassword ||
-              (createDialog?.type === "system" && (!createDialog?.username || !createDialog?.password))
+              createDialog?.type === "system"
+                ? !createDialog?.username || !createDialog?.password
+                : !createDialog?.output_power_total_oid
             }
           />
         </Modal>
@@ -850,22 +882,14 @@ export default function NmapScanPage() {
             <Field label="Device Type">
               <Input value={ignoreDialog?.device_type || ""} disabled className="capitalize" />
             </Field>
-            <Field label="Admin Password" required>
-              <Input
-                type="password"
-                placeholder="Enter admin password"
-                value={adminPassword}
-                onChange={(e) => setAdminPassword(e.target.value)}
-              />
-            </Field>
           </div>
           <ModalFooter
             onCancel={closeDialogs}
             onConfirm={handleIgnoreDevice}
             confirmLabel="Ignore Device"
-            disabled={!adminPassword}
           />
         </Modal>
+
       </div>
     </main>
   );
