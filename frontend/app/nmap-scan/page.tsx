@@ -216,8 +216,8 @@ export default function NmapScanPage() {
           ip: createDialog.ip,
           site: createDialog.site || "",
           location: createDialog.location || "",
-          username: createDialog.username || "",
-          password: createDialog.password || "",
+          username: createDialog.username,
+          password: createDialog.password,
           admin_password: adminPassword,
           admin_user: "admin",
           reason: createDialog.reason || "",
@@ -729,12 +729,6 @@ export default function NmapScanPage() {
             <Field label="New IP">
               <Input value={updateDialog?.new_ip || ""} disabled />
             </Field>
-            <Field label="Reason (optional)">
-              <Input
-                placeholder="Why is this change being made?"
-                onChange={(e) => setUpdateDialog({ ...updateDialog, reason: e.target.value })}
-              />
-            </Field>
             <Field label="Admin Password" required>
               <Input
                 type="password"
@@ -787,13 +781,13 @@ export default function NmapScanPage() {
 
             {createDialog?.type === "system" && (
               <>
-                <Field label="BMC Username (optional)">
+                <Field label="BMC Username" required>
                   <Input
                     placeholder="root"
                     onChange={(e) => setCreateDialog({ ...createDialog, username: e.target.value })}
                   />
                 </Field>
-                <Field label="BMC Password (optional)">
+                <Field label="BMC Password" required>
                   <Input
                     type="password"
                     onChange={(e) => setCreateDialog({ ...createDialog, password: e.target.value })}
@@ -822,12 +816,6 @@ export default function NmapScanPage() {
               </>
             )}
 
-            <Field label="Reason (optional)">
-              <Input
-                placeholder="Why is this being created?"
-                onChange={(e) => setCreateDialog({ ...createDialog, reason: e.target.value })}
-              />
-            </Field>
             <Field label="Admin Password" required>
               <Input
                 type="password"
@@ -841,7 +829,10 @@ export default function NmapScanPage() {
             onCancel={closeDialogs}
             onConfirm={createDialog?.type === "system" ? handleCreateSystem : handleCreatePDU}
             confirmLabel={`Create ${createDialog?.type === "system" ? "System" : "PDU"}`}
-            disabled={!adminPassword}
+            disabled={
+              !adminPassword ||
+              (createDialog?.type === "system" && (!createDialog?.username || !createDialog?.password))
+            }
           />
         </Modal>
 
@@ -858,12 +849,6 @@ export default function NmapScanPage() {
             </Field>
             <Field label="Device Type">
               <Input value={ignoreDialog?.device_type || ""} disabled className="capitalize" />
-            </Field>
-            <Field label="Reason (optional)">
-              <Input
-                placeholder="Why is this device being ignored?"
-                onChange={(e) => setIgnoreDialog({ ...ignoreDialog, reason: e.target.value })}
-              />
             </Field>
             <Field label="Admin Password" required>
               <Input
