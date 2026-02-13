@@ -5,8 +5,10 @@ FROM python:3.10-bookworm
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies including nmap
-RUN apt-get update && \
+# Force HTTPS for apt sources (bookworm uses DEB822 .sources format)
+RUN find /etc/apt -name "*.list" -exec sed -i 's|http://|https://|g' {} + ; \
+    find /etc/apt -name "*.sources" -exec sed -i 's|http://|https://|g' {} + ; \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     nmap \
     && rm -rf /var/lib/apt/lists/*
