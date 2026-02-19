@@ -4,7 +4,7 @@ import subprocess
 import platform
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import Blueprint, jsonify, request
@@ -12,8 +12,25 @@ from utils.models.systems import Systems
 from utils.models.pdu import PDU
 from utils.models.change_log import ChangeLog
 from utils.models.ignored_device import IgnoredDevice
+from utils.models.disabled_device import DisabledDevice
+from utils.factory.database import Database
 
 nmap_scan = Blueprint("nmap_scan", __name__)
+
+
+def serialize(doc):
+    """Recursively convert ObjectId and datetime to JSON-safe types."""
+    from bson import ObjectId
+    from datetime import datetime
+    if isinstance(doc, list):
+        return [serialize(d) for d in doc]
+    if isinstance(doc, dict):
+        return {k: serialize(v) for k, v in doc.items()}
+    if isinstance(doc, ObjectId):
+        return str(doc)
+    if isinstance(doc, datetime):
+        return doc.isoformat()
+    return doc
 
 # Admin password - should be stored in environment variable in production
 ADMIN_PASSWORD = os.environ.get("NMAP_ADMIN_PASSWORD", "admin123")
@@ -176,29 +193,37 @@ def compare_with_database(scanned_devices):
     tracked_systems = systems_model.find({})
     tracked_pdus = pdu_model.find({})
 
-    # system name -> system record
+    # Build lookups
     systems_by_name = {
         s.get("system", "").lower(): s
         for s in tracked_systems
         if s.get("system")
     }
-
     systems_by_ip = {
         s.get("bmc_ip"): s
         for s in tracked_systems
         if s.get("bmc_ip")
     }
-
     pdus_by_name = {p.get("hostname", "").lower(): p for p in tracked_pdus}
+    pdus_by_ip = {p.get("ip"): p for p in tracked_pdus if p.get("ip")}
 
     analysis = {
         "new_systems": [],
         "new_pdus": [],
         "changed_system_ips": [],
         "changed_pdu_ips": [],
+        "changed_system_hostnames": [],
+        "changed_pdu_hostnames": [],
         "possible_system_resets": [],
-        "possible_pdu_resets": []
+        "possible_pdu_resets": [],
+        "not_detected_systems": [],
+        "not_detected_pdus": [],
     }
+
+    # Track which DB records were matched during this scan
+    matched_system_ids = set()
+    matched_pdu_names = set()
+    matched_ips = set()
 
     # ----------------------------
     # Systems (BMC hostname logic)
@@ -207,32 +232,53 @@ def compare_with_database(scanned_devices):
         bmc_hostname = d["hostname"].lower()
         ip = d["ip"]
 
-        matched_system = None
-
+        matched_by_name = None
         for system_name, system_record in systems_by_name.items():
             if system_name in bmc_hostname:
-                matched_system = system_record
+                matched_by_name = system_record
                 break
 
-        if not matched_system:
-            analysis["new_systems"].append(d)
-        else:
-            old_ip = matched_system.get("bmc_ip")
+        if matched_by_name:
+            # Matched by name — record as seen
+            matched_system_ids.add(str(matched_by_name.get("_id")))
+            matched_ips.add(ip)
+            # Update last_seen in DB
+            db = Database()
+            db.update(matched_by_name.get("_id"), {"last_seen": datetime.now()}, "systems")
+            old_ip = matched_by_name.get("bmc_ip")
             if old_ip and old_ip != ip:
                 analysis["changed_system_ips"].append({
-                    "hostname": matched_system.get("system"),
+                    "hostname": matched_by_name.get("system"),
                     "old_ip": old_ip,
                     "new_ip": ip,
-                    "_id": matched_system.get("_id")
+                    "_id": matched_by_name.get("_id")
                 })
+        elif ip in systems_by_ip:
+            # IP matches but hostname doesn't — hostname changed
+            matched_by_ip = systems_by_ip[ip]
+            matched_system_ids.add(str(matched_by_ip.get("_id")))
+            matched_ips.add(ip)
+            db = Database()
+            db.update(matched_by_ip.get("_id"), {"last_seen": datetime.now()}, "systems")
+            analysis["changed_system_hostnames"].append({
+                "ip": ip,
+                "old_hostname": matched_by_ip.get("system"),
+                "new_hostname": d["hostname"],
+                "_id": matched_by_ip.get("_id")
+            })
+        else:
+            # Neither name nor IP match — truly new
+            analysis["new_systems"].append(d)
 
     # ----------------------------
     # Possible system resets
     # ----------------------------
     for d in scanned_devices["non_standard"] + scanned_devices["no_hostname"]:
         ip = d["ip"]
-        if ip in systems_by_ip:
+        if ip in systems_by_ip and ip not in matched_ips:
             s = systems_by_ip[ip]
+            matched_system_ids.add(str(s.get("_id")))
+            matched_ips.add(ip)
             analysis["possible_system_resets"].append({
                 "ip": ip,
                 "expected_hostname": s.get("system"),
@@ -242,18 +288,59 @@ def compare_with_database(scanned_devices):
     # ----------------------------
     # PDUs
     # ----------------------------
+    matched_pdu_ids = set()
+
     for d in scanned_devices["pdus"]:
         hostname = d["hostname"]
         name = hostname.lower()
         ip = d["ip"]
-        
-        if name not in pdus_by_name:
-            analysis["new_pdus"].append(d)
-        else:
-            # Check for IP changes
+
+        if name in pdus_by_name:
             pdu_record = pdus_by_name[name]
-            # PDU model doesn't have an IP field currently, so we can't check for changes
-            # If you want to track PDU IP changes, you'll need to add an IP field to the PDU model
+            matched_pdu_ids.add(str(pdu_record.get("_id")))
+            db = Database()
+            db.update(pdu_record.get("_id"), {"last_seen": datetime.now()}, "pdus")
+        elif ip in pdus_by_ip:
+            matched_pdu = pdus_by_ip[ip]
+            matched_pdu_ids.add(str(matched_pdu.get("_id")))
+            db = Database()
+            db.update(matched_pdu.get("_id"), {"last_seen": datetime.now()}, "pdus")
+            analysis["changed_pdu_hostnames"].append({
+                "ip": ip,
+                "old_hostname": matched_pdu.get("hostname"),
+                "new_hostname": hostname,
+                "_id": matched_pdu.get("_id")
+            })
+        else:
+            analysis["new_pdus"].append(d)
+
+    # ----------------------------
+    # Not detected — in DB but not seen this scan
+    # ----------------------------
+    two_weeks_ago = datetime.now() - timedelta(weeks=2)
+
+    for s in tracked_systems:
+        sid = str(s.get("_id"))
+        if sid not in matched_system_ids:
+            last_seen = s.get("last_seen")
+            analysis["not_detected_systems"].append({
+                "_id": sid,
+                "hostname": s.get("system"),
+                "bmc_ip": s.get("bmc_ip"),
+                "last_seen": last_seen.isoformat() if isinstance(last_seen, datetime) else last_seen,
+                "overdue": last_seen is not None and last_seen < two_weeks_ago,
+            })
+
+    for p in tracked_pdus:
+        pid = str(p.get("_id"))
+        if pid not in matched_pdu_ids:
+            last_seen = p.get("last_seen")
+            analysis["not_detected_pdus"].append({
+                "_id": pid,
+                "hostname": p.get("hostname"),
+                "last_seen": last_seen.isoformat() if isinstance(last_seen, datetime) else last_seen,
+                "overdue": last_seen is not None and last_seen < two_weeks_ago,
+            })
 
     return analysis
 
@@ -281,9 +368,9 @@ def update_system():
                 "message": "Missing required fields"
             }), 400
         
-        # Update the system
-        systems_model = Systems()
-        update_result = systems_model.update(system_id, {"bmc_ip": new_ip})
+        # Use db directly - bmc_ip is not in the model's update_optional_fields
+        db = Database()
+        update_result = db.update(system_id, {"bmc_ip": new_ip}, "systems")
         
         # Log the change
         change_log = ChangeLog()
@@ -312,6 +399,65 @@ def update_system():
         }), 500
 
 
+@nmap_scan.route("/update-hostname", methods=["POST"])
+@require_admin_password
+def update_hostname():
+    """Update system or PDU hostname in the database"""
+    try:
+        data = request.json
+        entity_id = data.get("entity_id")
+        entity_type = data.get("entity_type")  # "system" or "pdu"
+        old_hostname = data.get("old_hostname")
+        new_hostname = data.get("new_hostname")
+        ip = data.get("ip")
+        admin_user = data.get("admin_user", "admin")
+
+        if not all([entity_id, entity_type, old_hostname, new_hostname]):
+            return jsonify({
+                "status": "error",
+                "message": "Missing required fields"
+            }), 400
+
+        db = Database()
+
+        if entity_type == "system":
+            # Extract clean system name from BMC hostname
+            system_name = new_hostname.replace("bmc-", "").replace(".amd.com", "")
+            db.update(entity_id, {"system": system_name}, "systems")
+            entity_name = system_name
+            collection = "systems"
+        elif entity_type == "pdu":
+            db.update(entity_id, {"hostname": new_hostname}, "pdus")
+            entity_name = new_hostname
+            collection = "pdus"
+        else:
+            return jsonify({"status": "error", "message": "Invalid entity_type"}), 400
+
+        # Log the change
+        change_log = ChangeLog()
+        change_log.create({
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "change_type": "hostname_update",
+            "old_values": {"hostname": old_hostname},
+            "new_values": {"hostname": new_hostname},
+            "changed_by": admin_user,
+            "created": datetime.now()
+        })
+
+        return jsonify({
+            "status": "success",
+            "message": f"Successfully updated {entity_type} hostname to {new_hostname}"
+        })
+
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
 @nmap_scan.route("/create-system", methods=["POST"])
 @require_admin_password
 def create_system():
@@ -327,39 +473,40 @@ def create_system():
         admin_user = data.get("admin_user", "admin")
         reason = data.get("reason", "")
         
-        if not all([hostname, ip]):
+        if not all([hostname, ip, site, location, username, password]):
+            missing = [f for f, v in {"hostname": hostname, "ip": ip, "site": site,
+                                       "location": location, "username": username,
+                                       "password": password}.items() if not v]
             return jsonify({
                 "status": "error",
-                "message": "Missing required fields (hostname and ip)"
+                "message": f"Missing required fields: {', '.join(missing)}"
             }), 400
         
         # Extract system name from BMC hostname
         # Example: bmc-smci001-odcdh1-a01.amd.com -> smci001-odcdh1-a01
         system_name = hostname.replace("bmc-", "").replace(".amd.com", "")
         
-        # Create the system
-        systems_model = Systems()
+        # Bypass the model validator and write directly to the database
+        # so we can include bmc_ip + credentials in one atomic insert
+        # Field order matches existing DB documents exactly
+        db = Database()
         new_system_data = {
             "system": system_name,
-            "bmc_ip": ip,
             "site": site,
             "location": location,
             "created": datetime.now(),
-            "updated": datetime.now()
+            "updated": datetime.now(),
+            "bmc_ip": ip,
+            "password": password,
+            "username": username,
         }
         
-        # Add credentials if provided
-        if username:
-            new_system_data["username"] = username
-        if password:
-            new_system_data["password"] = password
+        inserted_id = db.insert(new_system_data, "systems")
         
-        result = systems_model.create(new_system_data)
-        
-        # Extract the inserted ID from result string ("Inserted Id <id>")
-        inserted_id = result.split("Inserted Id ")[-1] if "Inserted Id" in result else None
-        
-        # Log the change
+        # Log the change - exclude datetime fields from new_values to avoid
+        # serialization issues when the change log is later retrieved
+        loggable_values = {k: v for k, v in new_system_data.items()
+                           if not isinstance(v, datetime)}
         change_log = ChangeLog()
         change_log.create({
             "entity_type": "system",
@@ -367,7 +514,7 @@ def create_system():
             "entity_name": system_name,
             "change_type": "create",
             "old_values": {},
-            "new_values": new_system_data,
+            "new_values": loggable_values,
             "changed_by": admin_user,
             "reason": reason,
             "created": datetime.now()
@@ -424,7 +571,9 @@ def create_pdu():
         # Extract the inserted ID
         inserted_id = result.split("Inserted Id ")[-1] if "Inserted Id" in result else None
         
-        # Log the change
+        # Log the change - exclude datetime fields from new_values
+        loggable_pdu_values = {k: v for k, v in new_pdu_data.items()
+                                if not isinstance(v, datetime)}
         change_log = ChangeLog()
         change_log.create({
             "entity_type": "pdu",
@@ -432,7 +581,7 @@ def create_pdu():
             "entity_name": hostname,
             "change_type": "create",
             "old_values": {},
-            "new_values": new_pdu_data,
+            "new_values": loggable_pdu_values,
             "changed_by": admin_user,
             "reason": reason,
             "created": datetime.now()
@@ -509,7 +658,7 @@ def get_ignored_devices():
         
         return jsonify({
             "status": "success",
-            "ignored_devices": ignored_devices
+            "ignored_devices": serialize(ignored_devices)
         })
         
     except Exception as e:
@@ -566,7 +715,7 @@ def get_change_logs():
         
         return jsonify({
             "status": "success",
-            "change_logs": logs
+            "change_logs": serialize(logs)
         })
         
     except Exception as e:
@@ -574,6 +723,123 @@ def get_change_logs():
             "status": "error",
             "message": str(e)
         }), 500
+
+
+@nmap_scan.route("/disabled-devices", methods=["GET"])
+def get_disabled_devices():
+    """Get all devices in the disabled collection"""
+    try:
+        disabled_model = DisabledDevice()
+        devices = disabled_model.find({}, sort=[("disabled_at", -1)])
+        return jsonify({"status": "success", "disabled_devices": serialize(devices)})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@nmap_scan.route("/move-to-disabled", methods=["POST"])
+@require_admin_password
+def move_to_disabled():
+    """Move a system or PDU to the disabled collection"""
+    try:
+        data = request.json
+        entity_id = data.get("entity_id")
+        entity_type = data.get("entity_type")  # "system" or "pdu"
+        admin_user = data.get("admin_user", "admin")
+
+        if not all([entity_id, entity_type]):
+            return jsonify({"status": "error", "message": "Missing entity_id or entity_type"}), 400
+
+        db = Database()
+        collection = "systems" if entity_type == "system" else "pdus"
+        record = db.find_by_id(entity_id, collection)
+
+        if not record:
+            return jsonify({"status": "error", "message": "Record not found"}), 404
+
+        # Already in disabled?
+        disabled_model = DisabledDevice()
+        existing = disabled_model.find({"entity_id": entity_id})
+        if existing:
+            return jsonify({"status": "error", "message": "Already in disabled collection"}), 400
+
+        entity_name = record.get("system") if entity_type == "system" else record.get("hostname")
+        last_seen = record.get("last_seen")
+
+        loggable_record = {k: v for k, v in record.items() if not isinstance(v, datetime)}
+        disabled_model.create({
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "last_seen": last_seen,
+            "disabled_at": datetime.now(),
+            "original_data": loggable_record,
+        })
+
+        # Remove from active collection
+        db.delete(entity_id, collection)
+
+        change_log = ChangeLog()
+        change_log.create({
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "entity_name": entity_name,
+            "change_type": "disabled",
+            "old_values": {},
+            "new_values": {"status": "disabled"},
+            "changed_by": admin_user,
+            "created": datetime.now(),
+        })
+
+        return jsonify({"status": "success", "message": f"Moved {entity_name} to disabled"})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@nmap_scan.route("/restore-from-disabled", methods=["POST"])
+@require_admin_password
+def restore_from_disabled():
+    """Restore a device from the disabled collection back to systems/pdus"""
+    try:
+        data = request.json
+        disabled_id = data.get("disabled_id")
+        admin_user = data.get("admin_user", "admin")
+
+        if not disabled_id:
+            return jsonify({"status": "error", "message": "Missing disabled_id"}), 400
+
+        disabled_model = DisabledDevice()
+        record = disabled_model.find_by_id(disabled_id)
+
+        if not record:
+            return jsonify({"status": "error", "message": "Disabled record not found"}), 404
+
+        entity_type = record.get("entity_type")
+        entity_name = record.get("entity_name")
+        original_data = record.get("original_data", {})
+        collection = "systems" if entity_type == "system" else "pdus"
+
+        db = Database()
+        db.insert(original_data, collection)
+
+        disabled_model.delete(disabled_id)
+
+        change_log = ChangeLog()
+        change_log.create({
+            "entity_type": entity_type,
+            "entity_id": disabled_id,
+            "entity_name": entity_name,
+            "change_type": "restored",
+            "old_values": {"status": "disabled"},
+            "new_values": {"status": "active"},
+            "changed_by": admin_user,
+            "created": datetime.now(),
+        })
+
+        return jsonify({"status": "success", "message": f"Restored {entity_name}"})
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # -------------------------------------------------------------------

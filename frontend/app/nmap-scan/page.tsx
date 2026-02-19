@@ -30,6 +30,8 @@ import {
   History,
   Lock,
   Unlock,
+  PowerOff,
+  RotateCcw,
 } from "lucide-react";
 
 // ── Plain Modal ───────────────────────────────────────────────────────────────
@@ -94,6 +96,46 @@ function Tabs({
   );
 }
 
+// ── Field ─────────────────────────────────────────────────────────────────────
+function Field({
+  label,
+  required,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <label className={`text-sm font-medium ${required ? "text-red-600" : ""}`}>
+        {label} {required && "*"}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+// ── ModalFooter ───────────────────────────────────────────────────────────────
+function ModalFooter({
+  onCancel,
+  onConfirm,
+  confirmLabel,
+  disabled,
+}: {
+  onCancel: () => void;
+  onConfirm: () => void;
+  confirmLabel: string;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="flex justify-end gap-2 pt-2">
+      <Button variant="outline" onClick={onCancel}>Cancel</Button>
+      <Button onClick={onConfirm} disabled={disabled}>{confirmLabel}</Button>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function NmapScanPage() {
@@ -117,11 +159,13 @@ export default function NmapScanPage() {
   // ── Data ────────────────────────────────────────────────────────────────────
   const [changeLogs, setChangeLogs] = useState<any[]>([]);
   const [ignoredDevices, setIgnoredDevices] = useState<any[]>([]);
+  const [disabledDevices, setDisabledDevices] = useState<any[]>([]);
 
   React.useEffect(() => {
     checkScannerStatus();
     fetchChangeLogs();
     fetchIgnoredDevices();
+    fetchDisabledDevices();
   }, []);
 
   // ── Lock / Unlock ───────────────────────────────────────────────────────────
@@ -202,6 +246,17 @@ export default function NmapScanPage() {
     }
   };
 
+  const fetchDisabledDevices = async () => {
+    try {
+      const response = await axios.get(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/disabled-devices`
+      );
+      if (response.data.status === "success") setDisabledDevices(response.data.disabled_devices);
+    } catch (e) {
+      console.error("Failed to fetch disabled devices:", e);
+    }
+  };
+
   const closeDialogs = () => {
     setUpdateDialog(null);
     setCreateDialog(null);
@@ -231,6 +286,63 @@ export default function NmapScanPage() {
       }
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to update system");
+    }
+  };
+
+  const handleMoveToDisabled = async (entityId: string, entityType: "system" | "pdu") => {
+    if (!confirm(`Move this ${entityType} to disabled?`)) return;
+    try {
+      await axios.post(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/move-to-disabled`,
+        { entity_id: entityId, entity_type: entityType, admin_password: adminPassword, admin_user: "admin" }
+      );
+      alert("Moved to disabled successfully");
+      fetchDisabledDevices();
+      runScan();
+      fetchChangeLogs();
+    } catch (e: any) {
+      alert(e.response?.data?.message || "Failed to move to disabled");
+    }
+  };
+
+  const handleRestoreFromDisabled = async (disabledId: string) => {
+    if (!confirm("Restore this device back to active?")) return;
+    try {
+      await axios.post(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/restore-from-disabled`,
+        { disabled_id: disabledId, admin_password: adminPassword, admin_user: "admin" }
+      );
+      alert("Restored successfully");
+      fetchDisabledDevices();
+      runScan();
+      fetchChangeLogs();
+    } catch (e: any) {
+      alert(e.response?.data?.message || "Failed to restore");
+    }
+  };
+
+  const handleUpdateHostname = async (item: any, entityType: "system" | "pdu") => {
+    if (!item) return;
+    try {
+      const response = await axios.post(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/update-hostname`,
+        {
+          entity_id: item._id,
+          entity_type: entityType,
+          old_hostname: item.old_hostname,
+          new_hostname: item.new_hostname,
+          ip: item.ip,
+          admin_password: adminPassword,
+          admin_user: "admin",
+        }
+      );
+      if (response.data.status === "success") {
+        alert(`${entityType === "system" ? "System" : "PDU"} hostname updated successfully!`);
+        fetchChangeLogs();
+        runScan();
+      }
+    } catch (e: any) {
+      alert(e.response?.data?.message || "Failed to update hostname");
     }
   };
 
@@ -327,41 +439,6 @@ export default function NmapScanPage() {
     }
   };
 
-  // ── Helpers ─────────────────────────────────────────────────────────────────
-  const Field = ({
-    label,
-    required,
-    children,
-  }: {
-    label: string;
-    required?: boolean;
-    children: React.ReactNode;
-  }) => (
-    <div className="space-y-1">
-      <label className={`text-sm font-medium ${required ? "text-red-600" : ""}`}>
-        {label} {required && "*"}
-      </label>
-      {children}
-    </div>
-  );
-
-  const ModalFooter = ({
-    onCancel,
-    onConfirm,
-    confirmLabel,
-    disabled,
-  }: {
-    onCancel: () => void;
-    onConfirm: () => void;
-    confirmLabel: string;
-    disabled?: boolean;
-  }) => (
-    <div className="flex justify-end gap-2 pt-2">
-      <Button variant="outline" onClick={onCancel}>Cancel</Button>
-      <Button onClick={onConfirm} disabled={disabled}>{confirmLabel}</Button>
-    </div>
-  );
-
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <main className="flex flex-col items-center justify-center min-h-screen w-full px-4">
@@ -445,7 +522,7 @@ export default function NmapScanPage() {
 
         {/* Results Tabs */}
         {scanData && (
-          <Tabs tabs={["Analysis", "All Devices", "Change Logs", "Ignored Devices"]}>
+          <Tabs tabs={["Analysis", "All Devices", "Change Logs", "Ignored Devices", "Disabled Devices"]}>
             {(active) => (
               <>
                 {/* ── Analysis ──────────────────────────────────────────────── */}
@@ -549,6 +626,106 @@ export default function NmapScanPage() {
                       </Card>
                     )}
 
+                    {/* Changed System Hostnames */}
+                    {scanData.analysis.changed_system_hostnames?.length > 0 && (
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <AlertTriangle className="h-5 w-5 text-orange-600" />
+                            Changed System Hostnames ({scanData.analysis.changed_system_hostnames.length})
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>IP</TableHead>
+                                <TableHead>Old Hostname</TableHead>
+                                <TableHead>New Hostname</TableHead>
+                                <TableHead>Actions</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {scanData.analysis.changed_system_hostnames.map((change: any, idx: number) => (
+                                <TableRow key={idx}>
+                                  <TableCell>{change.ip}</TableCell>
+                                  <TableCell className="text-gray-500">{change.old_hostname}</TableCell>
+                                  <TableCell className="font-medium">{change.new_hostname}</TableCell>
+                                  <TableCell className="space-x-2">
+                                    <Button
+                                      size="sm"
+                                      disabled={!isUnlocked}
+                                      onClick={() => handleUpdateHostname(change, "system")}
+                                    >
+                                      <Edit className="mr-1 h-3 w-3" /> Update
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={!isUnlocked}
+                                      onClick={() => setIgnoreDialog({ hostname: change.new_hostname, device_type: "system" })}
+                                    >
+                                      <Ban className="mr-1 h-3 w-3" /> Ignore
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Changed PDU Hostnames */}
+                    {scanData.analysis.changed_pdu_hostnames?.length > 0 && (
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <AlertTriangle className="h-5 w-5 text-orange-600" />
+                            Changed PDU Hostnames ({scanData.analysis.changed_pdu_hostnames.length})
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>IP</TableHead>
+                                <TableHead>Old Hostname</TableHead>
+                                <TableHead>New Hostname</TableHead>
+                                <TableHead>Actions</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {scanData.analysis.changed_pdu_hostnames.map((change: any, idx: number) => (
+                                <TableRow key={idx}>
+                                  <TableCell>{change.ip}</TableCell>
+                                  <TableCell className="text-gray-500">{change.old_hostname}</TableCell>
+                                  <TableCell className="font-medium">{change.new_hostname}</TableCell>
+                                  <TableCell className="space-x-2">
+                                    <Button
+                                      size="sm"
+                                      disabled={!isUnlocked}
+                                      onClick={() => handleUpdateHostname(change, "pdu")}
+                                    >
+                                      <Edit className="mr-1 h-3 w-3" /> Update
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={!isUnlocked}
+                                      onClick={() => setIgnoreDialog({ hostname: change.new_hostname, device_type: "pdu" })}
+                                    >
+                                      <Ban className="mr-1 h-3 w-3" /> Ignore
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </CardContent>
+                      </Card>
+                    )}
+
                     {/* New PDUs */}
                     {scanData.analysis.new_pdus.length > 0 && (
                       <Card>
@@ -598,9 +775,123 @@ export default function NmapScanPage() {
                     )}
 
                     {/* No changes */}
+                    {/* Not Detected Systems */}
+                    {scanData.analysis.not_detected_systems?.length > 0 && (
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <PowerOff className="h-5 w-5 text-red-600" />
+                            Not Detected Systems ({scanData.analysis.not_detected_systems.length})
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>System</TableHead>
+                                <TableHead>BMC IP</TableHead>
+                                <TableHead>Last Seen</TableHead>
+                                <TableHead>Actions</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {scanData.analysis.not_detected_systems.map((s: any, idx: number) => (
+                                <TableRow key={idx} className={s.overdue ? "bg-red-50 dark:bg-red-950/20" : ""}>
+                                  <TableCell>{s.hostname}</TableCell>
+                                  <TableCell>{s.bmc_ip || "—"}</TableCell>
+                                  <TableCell className={s.overdue ? "text-red-600 font-medium" : ""}>
+                                    {s.last_seen ? new Date(s.last_seen).toLocaleDateString() : "Never"}
+                                    {s.overdue && " ⚠ >2 weeks"}
+                                  </TableCell>
+                                  <TableCell className="space-x-2">
+                                    {s.overdue && (
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        disabled={!isUnlocked}
+                                        onClick={() => handleMoveToDisabled(s._id, "system")}
+                                      >
+                                        <PowerOff className="mr-1 h-3 w-3" /> Disable
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={!isUnlocked}
+                                      onClick={() => setIgnoreDialog({ hostname: s.hostname, device_type: "system" })}
+                                    >
+                                      <Ban className="mr-1 h-3 w-3" /> Ignore
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Not Detected PDUs */}
+                    {scanData.analysis.not_detected_pdus?.length > 0 && (
+                      <Card>
+                        <CardHeader>
+                          <CardTitle className="flex items-center gap-2">
+                            <PowerOff className="h-5 w-5 text-red-600" />
+                            Not Detected PDUs ({scanData.analysis.not_detected_pdus.length})
+                          </CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Hostname</TableHead>
+                                <TableHead>Last Seen</TableHead>
+                                <TableHead>Actions</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {scanData.analysis.not_detected_pdus.map((p: any, idx: number) => (
+                                <TableRow key={idx} className={p.overdue ? "bg-red-50 dark:bg-red-950/20" : ""}>
+                                  <TableCell>{p.hostname}</TableCell>
+                                  <TableCell className={p.overdue ? "text-red-600 font-medium" : ""}>
+                                    {p.last_seen ? new Date(p.last_seen).toLocaleDateString() : "Never"}
+                                    {p.overdue && " ⚠ >2 weeks"}
+                                  </TableCell>
+                                  <TableCell className="space-x-2">
+                                    {p.overdue && (
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        disabled={!isUnlocked}
+                                        onClick={() => handleMoveToDisabled(p._id, "pdu")}
+                                      >
+                                        <PowerOff className="mr-1 h-3 w-3" /> Disable
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={!isUnlocked}
+                                      onClick={() => setIgnoreDialog({ hostname: p.hostname, device_type: "pdu" })}
+                                    >
+                                      <Ban className="mr-1 h-3 w-3" /> Ignore
+                                    </Button>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </CardContent>
+                      </Card>
+                    )}
+
                     {scanData.analysis.new_systems.length === 0 &&
                       scanData.analysis.changed_system_ips.length === 0 &&
-                      scanData.analysis.new_pdus.length === 0 && (
+                      scanData.analysis.new_pdus.length === 0 &&
+                      (scanData.analysis.changed_system_hostnames?.length ?? 0) === 0 &&
+                      (scanData.analysis.changed_pdu_hostnames?.length ?? 0) === 0 &&
+                      (scanData.analysis.not_detected_systems?.length ?? 0) === 0 &&
+                      (scanData.analysis.not_detected_pdus?.length ?? 0) === 0 && (
                         <Card className="border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950/20">
                           <CardContent className="pt-6">
                             <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
@@ -730,6 +1021,68 @@ export default function NmapScanPage() {
                     </CardContent>
                   </Card>
                 )}
+
+                {/* ── Disabled Devices ──────────────────────────────────────────── */}
+                {active === "Disabled Devices" && (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <PowerOff className="h-5 w-5 text-red-600" />
+                        Disabled Devices
+                      </CardTitle>
+                      <CardDescription>Systems and PDUs that have not been detected for over 2 weeks</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {disabledDevices.length === 0 ? (
+                        <p className="text-gray-500 text-sm">No disabled devices.</p>
+                      ) : (
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Type</TableHead>
+                              <TableHead>Name</TableHead>
+                              <TableHead>Last Seen</TableHead>
+                              <TableHead>Disabled At</TableHead>
+                              <TableHead>Actions</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {disabledDevices.map((d: any) => (
+                              <TableRow key={d._id}>
+                                <TableCell className="capitalize">{d.entity_type}</TableCell>
+                                <TableCell>{d.entity_name}</TableCell>
+                                <TableCell>
+                                  {d.last_seen ? new Date(d.last_seen).toLocaleDateString() : "Never"}
+                                </TableCell>
+                                <TableCell>
+                                  {d.disabled_at ? new Date(d.disabled_at).toLocaleDateString() : "—"}
+                                </TableCell>
+                                <TableCell className="space-x-2">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={!isUnlocked}
+                                    onClick={() => handleRestoreFromDisabled(d._id)}
+                                  >
+                                    <RotateCcw className="mr-1 h-3 w-3" /> Restore
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={!isUnlocked}
+                                    onClick={() => setIgnoreDialog({ hostname: d.entity_name, device_type: d.entity_type })}
+                                  >
+                                    <Ban className="mr-1 h-3 w-3" /> Ignore
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      )}
+                    </CardContent>
+                  </Card>
+                )}
               </>
             )}
           </Tabs>
@@ -815,13 +1168,13 @@ export default function NmapScanPage() {
                 onChange={(e) => setCreateDialog({ ...createDialog, ip: e.target.value })}
               />
             </Field>
-            <Field label="Site">
+            <Field label="Site" required>
               <Input
                 placeholder="e.g., odcdh1"
                 onChange={(e) => setCreateDialog({ ...createDialog, site: e.target.value })}
               />
             </Field>
-            <Field label="Location">
+            <Field label="Location" required>
               <Input
                 placeholder="e.g., a01"
                 onChange={(e) => setCreateDialog({ ...createDialog, location: e.target.value })}
@@ -862,8 +1215,10 @@ export default function NmapScanPage() {
             confirmLabel={`Create ${createDialog?.type === "system" ? "System" : "PDU"}`}
             disabled={
               createDialog?.type === "system"
-                ? !createDialog?.username || !createDialog?.password
-                : !createDialog?.output_power_total_oid
+                ? !createDialog?.site || !createDialog?.location ||
+                  !createDialog?.username || !createDialog?.password
+                : !createDialog?.site || !createDialog?.location ||
+                  !createDialog?.output_power_total_oid
             }
           />
         </Modal>
