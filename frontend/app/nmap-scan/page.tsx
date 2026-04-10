@@ -280,9 +280,18 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("System updated successfully!");
+        // Remove from changed_system_ips list
+        setScanData((prev: any) => ({
+          ...prev,
+          analysis: {
+            ...prev.analysis,
+            changed_system_ips: prev.analysis.changed_system_ips.filter(
+              (item: any) => item._id !== updateDialog._id
+            ),
+          },
+        }));
         closeDialogs();
         fetchChangeLogs();
-        runScan();
       }
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to update system");
@@ -297,8 +306,19 @@ export default function NmapScanPage() {
         { entity_id: entityId, entity_type: entityType, admin_password: adminPassword, admin_user: "admin" }
       );
       alert("Moved to disabled successfully");
+      // Remove from not_detected list
+      const key = entityType === "system" ? "not_detected_systems" : "not_detected_pdus";
+      setScanData((prev: any) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          analysis: {
+            ...prev.analysis,
+            [key]: prev.analysis[key]?.filter((item: any) => item._id !== entityId) || [],
+          },
+        };
+      });
       fetchDisabledDevices();
-      runScan();
       fetchChangeLogs();
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to move to disabled");
@@ -314,7 +334,6 @@ export default function NmapScanPage() {
       );
       alert("Restored successfully");
       fetchDisabledDevices();
-      runScan();
       fetchChangeLogs();
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to restore");
@@ -338,8 +357,16 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert(`${entityType === "system" ? "System" : "PDU"} hostname updated successfully!`);
+        // Remove from changed hostnames list
+        const key = entityType === "system" ? "changed_system_hostnames" : "changed_pdu_hostnames";
+        setScanData((prev: any) => ({
+          ...prev,
+          analysis: {
+            ...prev.analysis,
+            [key]: prev.analysis[key].filter((i: any) => i._id !== item._id),
+          },
+        }));
         fetchChangeLogs();
-        runScan();
       }
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to update hostname");
@@ -364,9 +391,18 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("System created successfully!");
+        // Remove from new_systems list
+        setScanData((prev: any) => ({
+          ...prev,
+          analysis: {
+            ...prev.analysis,
+            new_systems: prev.analysis.new_systems.filter(
+              (item: any) => item.hostname !== createDialog.hostname || item.ip !== createDialog.ip
+            ),
+          },
+        }));
         closeDialogs();
         fetchChangeLogs();
-        runScan();
       }
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to create system");
@@ -391,9 +427,18 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("PDU created successfully!");
+        // Remove from new_pdus list
+        setScanData((prev: any) => ({
+          ...prev,
+          analysis: {
+            ...prev.analysis,
+            new_pdus: prev.analysis.new_pdus.filter(
+              (item: any) => item.hostname !== createDialog.hostname || item.ip !== createDialog.ip
+            ),
+          },
+        }));
         closeDialogs();
         fetchChangeLogs();
-        runScan();
       }
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to create PDU");
@@ -414,9 +459,41 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("Device ignored successfully!");
+        // Remove from all lists where it might appear
+        setScanData((prev: any) => {
+          if (!prev) return prev;
+          const hostname = ignoreDialog.hostname.toLowerCase();
+          const deviceType = ignoreDialog.device_type;
+          return {
+            ...prev,
+            analysis: {
+              ...prev.analysis,
+              new_systems: prev.analysis.new_systems?.filter(
+                (item: any) => item.hostname.toLowerCase() !== hostname
+              ) || [],
+              new_pdus: prev.analysis.new_pdus?.filter(
+                (item: any) => item.hostname.toLowerCase() !== hostname
+              ) || [],
+              changed_system_ips: prev.analysis.changed_system_ips?.filter(
+                (item: any) => item.hostname?.toLowerCase() !== hostname
+              ) || [],
+              changed_system_hostnames: prev.analysis.changed_system_hostnames?.filter(
+                (item: any) => item.new_hostname?.toLowerCase() !== hostname
+              ) || [],
+              changed_pdu_hostnames: prev.analysis.changed_pdu_hostnames?.filter(
+                (item: any) => item.new_hostname?.toLowerCase() !== hostname
+              ) || [],
+              not_detected_systems: prev.analysis.not_detected_systems?.filter(
+                (item: any) => item.hostname?.toLowerCase() !== hostname
+              ) || [],
+              not_detected_pdus: prev.analysis.not_detected_pdus?.filter(
+                (item: any) => item.hostname?.toLowerCase() !== hostname
+              ) || [],
+            },
+          };
+        });
         closeDialogs();
         fetchIgnoredDevices();
-        runScan();
       }
     } catch (e: any) {
       alert(e.response?.data?.message || "Failed to ignore device");
@@ -741,6 +818,7 @@ export default function NmapScanPage() {
                               <TableRow>
                                 <TableHead>Hostname</TableHead>
                                 <TableHead>IP Address</TableHead>
+                                <TableHead>Type</TableHead>
                                 <TableHead>Actions</TableHead>
                               </TableRow>
                             </TableHeader>
@@ -749,11 +827,19 @@ export default function NmapScanPage() {
                                 <TableRow key={idx}>
                                   <TableCell>{device.hostname}</TableCell>
                                   <TableCell>{device.ip}</TableCell>
+                                  <TableCell className="capitalize">{device.pdu_type || "unknown"}</TableCell>
                                   <TableCell className="space-x-2">
                                     <Button
                                       size="sm"
                                       disabled={!isUnlocked}
-                                      onClick={() => setCreateDialog({ hostname: device.hostname, ip: device.ip, type: "pdu" })}
+                                      onClick={() => setCreateDialog({ 
+                                        hostname: device.hostname, 
+                                        ip: device.ip, 
+                                        type: "pdu",
+                                        pdu_type: device.pdu_type,
+                                        output_power_total_oid: device.default_oid || "",
+                                        sys_descr: device.sys_descr || ""
+                                      })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Create
                                     </Button>
@@ -1199,14 +1285,35 @@ export default function NmapScanPage() {
             )}
 
             {createDialog?.type === "pdu" && (
-              <Field label="Output Power Total OID" required>
-                <Input
-                  placeholder="1.3.6.1.4.1.850.1.1.3.2.2.1.1.9.1"
-                  onChange={(e) =>
-                    setCreateDialog({ ...createDialog, output_power_total_oid: e.target.value })
-                  }
-                />
-              </Field>
+              <>
+                {createDialog?.pdu_type && (
+                  <Field label="PDU Type">
+                    <Input
+                      value={createDialog.pdu_type.toUpperCase()}
+                      disabled
+                      className="capitalize font-medium"
+                    />
+                  </Field>
+                )}
+                {createDialog?.pdu_type === "unknown" && createDialog?.sys_descr && (
+                  <Field label="System Description">
+                    <Input
+                      value={createDialog.sys_descr}
+                      disabled
+                      className="text-xs"
+                    />
+                  </Field>
+                )}
+                <Field label="Output Power Total OID" required>
+                  <Input
+                    placeholder="1.3.6.1.4.1.850.1.1.3.2.2.1.1.9.1"
+                    value={createDialog?.output_power_total_oid || ""}
+                    onChange={(e) =>
+                      setCreateDialog({ ...createDialog, output_power_total_oid: e.target.value })
+                    }
+                  />
+                </Field>
+              </>
             )}
           </div>
           <ModalFooter

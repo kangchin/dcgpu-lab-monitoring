@@ -36,6 +36,47 @@ def serialize(doc):
 ADMIN_PASSWORD = os.environ.get("NMAP_ADMIN_PASSWORD", "admin123")
 
 
+def detect_pdu_type(hostname, ip, v2c="amd123"):
+    """Detect PDU type via SNMP sysDescr query and return type + default OID."""
+    try:
+        # Query SNMPv2-MIB::sysDescr.0 (1.3.6.1.2.1.1.1.0)
+        result = subprocess.run(
+            ["snmpwalk", "-v2c", "-c", v2c, "-Oqv", ip, "1.3.6.1.2.1.1.1.0"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        
+        if result.returncode != 0:
+            print(f"SNMP query failed for {hostname} ({ip}): {result.stderr}")
+            return {"type": "unknown", "default_oid": ""}
+        
+        sys_descr = result.stdout.strip().lower()
+        print(f"PDU {hostname} sysDescr: {sys_descr}")
+        
+        # Match manufacturer in sysDescr
+        if "tripp" in sys_descr or "tripplite" in sys_descr:
+            return {
+                "type": "tripplite",
+                "default_oid": "1.3.6.1.4.1.850.1.2.1.1.4.0"
+            }
+        elif "enlogic" in sys_descr:
+            return {
+                "type": "enlogic",
+                "default_oid": "1.3.6.1.4.1.38446.1.1.2.1.8.1.1"
+            }
+        else:
+            return {
+                "type": "unknown",
+                "default_oid": "",
+                "sys_descr": sys_descr[:100]  # Include first 100 chars for debugging
+            }
+    
+    except Exception as e:
+        print(f"Error detecting PDU type for {hostname}: {e}")
+        return {"type": "unknown", "default_oid": ""}
+
+
 def require_admin_password(f):
     """Decorator to require admin password for sensitive operations"""
     @wraps(f)
@@ -312,7 +353,14 @@ def compare_with_database(scanned_devices):
                 "_id": matched_pdu.get("_id")
             })
         else:
-            analysis["new_pdus"].append(d)
+            # Add PDU type detection info via SNMP
+            pdu_info = detect_pdu_type(hostname, ip)
+            analysis["new_pdus"].append({
+                **d,
+                "pdu_type": pdu_info["type"],
+                "default_oid": pdu_info["default_oid"],
+                "sys_descr": pdu_info.get("sys_descr", "")
+            })
 
     # ----------------------------
     # Not detected — in DB but not seen this scan
