@@ -1,4 +1,4 @@
-# celery/celery_app.py - UPDATED VERSION
+# celery/celery_app.py - UPDATED VERSION WITH 20-MINUTE TIMEOUT
 
 import tasks
 import os
@@ -24,6 +24,28 @@ app.conf.accept_content = ["json", "yaml"]
 app.conf.worker_send_task_events = True
 app.conf.enable_utc = False
 app.conf.timezone = "Asia/Kuala_Lumpur"
+
+# ============================================================================
+# TASK TIMEOUT CONFIGURATION - PREVENTS STUCK WORKERS
+# ============================================================================
+app.conf.update(
+    # Timeout settings
+    task_soft_time_limit=1140,  # 19 minutes - SoftTimeLimitExceeded exception
+    task_time_limit=1200,       # 20 minutes - hard kill (SIGKILL)
+    
+    # Task acknowledgment and retry behavior
+    task_acks_late=True,              # Don't acknowledge until task completes
+    task_reject_on_worker_lost=True,  # Requeue if worker dies unexpectedly
+    
+    # Worker performance tuning
+    worker_prefetch_multiplier=1,  # Process one task at a time per worker
+    worker_max_tasks_per_child=100,  # Restart worker after 100 tasks (prevent memory leaks)
+    
+    # Task result behavior
+    task_ignore_result=False,  # Keep results for debugging
+    result_expires=3600,       # Results expire after 1 hour
+)
+# ============================================================================
 
 # Updated beat schedule with more frequent system temperature checks
 app.conf.beat_schedule = {
