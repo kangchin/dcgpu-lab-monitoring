@@ -1080,6 +1080,63 @@ def fetch_power_data():
             print(f"✅ Power data saved: {len(power_list)} readings at {created_time}")
         else:
             print("⚠️  No power data collected")
+
+        # ── O(1) Redis running totals: monthly energy & live capacity ─────────
+        # Celery holds the Redis lock, so writes are single-writer; no races.
+        # Keys written here let both /api/power/monthly-summary and
+        # /api/power-capacity/current-previous respond in O(1).
+        try:
+            month_str  = created_time.strftime("%Y-%m")
+            date_str   = created_time.strftime("%Y-%m-%d")
+            energy_key = f"monthly_energy:{month_str}"
+ 
+            for power_data in power_list:
+                site     = power_data.get("site", "")
+                location = power_data.get("location", "")
+                reading  = float(power_data.get("reading", 0))
+                if not site:
+                    continue
+ 
+                # ── Monthly energy accumulator (Wh) ──────────────────────────
+                # HINCRBYFLOAT is atomic, O(1).
+                r.hincrbyfloat(energy_key, site, reading * (10.0 / 60.0))
+ 
+                # ── Per-location daily max → day sum → month live capacity ────
+                # Tracks: what is the highest single 10-min reading per
+                # location for today?  Summing those maxes across locations
+                # gives the site's "live capacity" for the day.
+                if location:
+                    sys_max_key = f"cap:sys_max:{site}:{date_str}:{location}"
+                    old_max_str = r.get(sys_max_key)
+                    old_max     = float(old_max_str) if old_max_str else 0.0
+ 
+                    if reading > old_max:
+                        delta = reading - old_max
+                        # Update the per-location max (33-day TTL covers full month + buffer)
+                        r.set(sys_max_key, reading, ex=33 * 24 * 3600)
+ 
+                        # Atomically add the delta to today's site total
+                        new_day_total = float(
+                            r.incrbyfloat(f"cap:day_total:{site}:{date_str}", delta)
+                        )
+                        r.expire(f"cap:day_total:{site}:{date_str}", 33 * 24 * 3600)
+ 
+                        # Propagate upward: is today's total the new monthly peak?
+                        month_live_key = f"cap:month_live:{site}:{month_str}"
+                        old_live_str   = r.get(month_live_key)
+                        old_live       = float(old_live_str) if old_live_str else 0.0
+                        if new_day_total > old_live:
+                            r.set(month_live_key, new_day_total, ex=90 * 24 * 3600)
+ 
+            # Refresh the energy key TTL once (avoids calling expire per item)
+            r.expire(energy_key, 90 * 24 * 3600)
+            print(f"✓ Redis running totals updated for {month_str}")
+ 
+        except Exception as redis_err:
+            # Non-critical: MongoDB holds the authoritative data.
+            # The next Celery run will self-correct any gap.
+            print(f"⚠️  Redis running total update failed (non-critical): {redis_err}")
+        # ── end Redis running totals ──────────────────────────────────────────
         
         # Release lock after successful completion
         r.delete(lock_key)
