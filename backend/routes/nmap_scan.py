@@ -400,111 +400,119 @@ def compare_with_database(scanned_devices):
 @nmap_scan.route("/update-system", methods=["POST"])
 @require_admin_password
 def update_system():
-    """Update system information (IP address, etc.)"""
+    """Update system IP address and optionally location."""
     try:
         data = request.json
-        system_id = data.get("system_id")
-        new_ip = data.get("new_ip")
-        old_ip = data.get("old_ip")
+        system_id   = data.get("system_id")
+        new_ip      = data.get("new_ip")
+        old_ip      = data.get("old_ip")
         system_name = data.get("system_name")
-        admin_user = data.get("admin_user", "admin")
-        reason = data.get("reason", "")
-        
+        location    = data.get("location")          # NEW
+        admin_user  = data.get("admin_user", "admin")
+        reason      = data.get("reason", "")
+ 
         if not all([system_id, new_ip, system_name]):
-            return jsonify({
-                "status": "error",
-                "message": "Missing required fields"
-            }), 400
-        
-        # Use db directly - bmc_ip is not in the model's update_optional_fields
+            return jsonify({"status": "error", "message": "Missing required fields"}), 400
+ 
         db = Database()
-        update_result = db.update(system_id, {"bmc_ip": new_ip}, "systems")
-        
+ 
+        # Always update the IP; include location if provided
+        update_data = {"bmc_ip": new_ip}
+        if location:
+            update_data["location"] = location
+ 
+        update_result = db.update(system_id, update_data, "systems")
+ 
         # Log the change
         change_log = ChangeLog()
+        new_values = {"bmc_ip": new_ip}
+        if location:
+            new_values["location"] = location
+ 
         change_log.create({
-            "entity_type": "system",
-            "entity_id": system_id,
-            "entity_name": system_name,
-            "change_type": "ip_update",
-            "old_values": {"bmc_ip": old_ip} if old_ip else {},
-            "new_values": {"bmc_ip": new_ip},
-            "changed_by": admin_user,
-            "reason": reason,
-            "created": datetime.now()
+            "entity_type":  "system",
+            "entity_id":    system_id,
+            "entity_name":  system_name,
+            "change_type":  "ip_update",
+            "old_values":   {"bmc_ip": old_ip} if old_ip else {},
+            "new_values":   new_values,
+            "changed_by":   admin_user,
+            "reason":       reason,
+            "created":      datetime.now(),
         })
-        
+ 
         return jsonify({
-            "status": "success",
-            "message": f"Successfully updated {system_name} IP to {new_ip}",
-            "update_result": update_result
+            "status":        "success",
+            "message":       f"Successfully updated {system_name} IP to {new_ip}",
+            "update_result": update_result,
         })
-        
+ 
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-
+        return jsonify({"status": "error", "message": str(e)}), 500
+ 
+ 
 @nmap_scan.route("/update-hostname", methods=["POST"])
 @require_admin_password
 def update_hostname():
-    """Update system or PDU hostname in the database"""
+    """Update system or PDU hostname (and optionally location) in the database."""
     try:
-        data = request.json
-        entity_id = data.get("entity_id")
-        entity_type = data.get("entity_type")  # "system" or "pdu"
+        data         = request.json
+        entity_id    = data.get("entity_id")
+        entity_type  = data.get("entity_type")   # "system" or "pdu"
         old_hostname = data.get("old_hostname")
         new_hostname = data.get("new_hostname")
-        ip = data.get("ip")
-        admin_user = data.get("admin_user", "admin")
-
+        ip           = data.get("ip")
+        location     = data.get("location")       # NEW
+        admin_user   = data.get("admin_user", "admin")
+ 
         if not all([entity_id, entity_type, old_hostname, new_hostname]):
-            return jsonify({
-                "status": "error",
-                "message": "Missing required fields"
-            }), 400
-
+            return jsonify({"status": "error", "message": "Missing required fields"}), 400
+ 
         db = Database()
-
+ 
         if entity_type == "system":
-            # Extract clean system name from BMC hostname
+            # Strip BMC prefix/suffix to get the clean system name
             system_name = new_hostname.replace("bmc-", "").replace(".amd.com", "")
-            db.update(entity_id, {"system": system_name}, "systems")
+            update_data = {"system": system_name}
+            if location:
+                update_data["location"] = location
+            db.update(entity_id, update_data, "systems")
             entity_name = system_name
-            collection = "systems"
+ 
         elif entity_type == "pdu":
-            db.update(entity_id, {"hostname": new_hostname}, "pdus")
+            update_data = {"hostname": new_hostname}
+            if location:
+                update_data["location"] = location
+            db.update(entity_id, update_data, "pdus")
             entity_name = new_hostname
-            collection = "pdus"
+ 
         else:
             return jsonify({"status": "error", "message": "Invalid entity_type"}), 400
-
+ 
         # Log the change
+        new_values = {"hostname": new_hostname}
+        if location:
+            new_values["location"] = location
+ 
         change_log = ChangeLog()
         change_log.create({
             "entity_type": entity_type,
-            "entity_id": entity_id,
+            "entity_id":   entity_id,
             "entity_name": entity_name,
             "change_type": "hostname_update",
-            "old_values": {"hostname": old_hostname},
-            "new_values": {"hostname": new_hostname},
-            "changed_by": admin_user,
-            "created": datetime.now()
+            "old_values":  {"hostname": old_hostname},
+            "new_values":  new_values,
+            "changed_by":  admin_user,
+            "created":     datetime.now(),
         })
-
+ 
         return jsonify({
-            "status": "success",
-            "message": f"Successfully updated {entity_type} hostname to {new_hostname}"
+            "status":  "success",
+            "message": f"Successfully updated {entity_type} hostname to {new_hostname}",
         })
-
+ 
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @nmap_scan.route("/create-system", methods=["POST"])
 @require_admin_password
