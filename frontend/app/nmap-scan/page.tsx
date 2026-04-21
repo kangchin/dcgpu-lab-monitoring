@@ -136,9 +136,22 @@ function ModalFooter({
   );
 }
 
-// ── Helper: strip BMC prefix/suffix from a hostname ──────────────────────────
+// ── Hostname helpers ──────────────────────────────────────────────────────────
+// Strip BMC prefix/suffix: "bmc-smci325-odcdh3-b06-2.amd.com" → "smci325-odcdh3-b06-2"
 function cleanHostname(hostname: string): string {
-  return hostname.replace("bmc-", "").replace(".amd.com", "");
+  return hostname.replace(/^bmc-/, "").replace(/\.amd\.com$/, "");
+}
+
+// parts[1] of cleaned hostname: "smci325-odcdh3-b06-2" → "odcdh3"
+function extractSite(hostname: string): string {
+  const parts = cleanHostname(hostname).split("-");
+  return parts[1] || "";
+}
+
+// parts[2] of cleaned hostname: "smci325-odcdh3-b06-2" → "b06"
+function extractLocation(hostname: string): string {
+  const parts = cleanHostname(hostname).split("-");
+  return parts[2] || "";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,7 +170,8 @@ export default function NmapScanPage() {
   const [showLockModal, setShowLockModal] = useState(false);
 
   // ── Dialog states ───────────────────────────────────────────────────────────
-  const [updateDialog, setUpdateDialog] = useState<any>(null);
+  const [updateDialog, setUpdateDialog] = useState<any>(null);                // Changed System IPs
+  const [hostnameUpdateDialog, setHostnameUpdateDialog] = useState<any>(null); // Changed Hostnames (system & PDU)
   const [createDialog, setCreateDialog] = useState<any>(null);
   const [ignoreDialog, setIgnoreDialog] = useState<any>(null);
 
@@ -264,11 +278,14 @@ export default function NmapScanPage() {
 
   const closeDialogs = () => {
     setUpdateDialog(null);
+    setHostnameUpdateDialog(null);
     setCreateDialog(null);
     setIgnoreDialog(null);
   };
 
   // ── Actions ─────────────────────────────────────────────────────────────────
+
+  // Update system IP — also sends location
   const handleUpdateSystem = async () => {
     if (!updateDialog) return;
     try {
@@ -279,6 +296,7 @@ export default function NmapScanPage() {
           system_name: updateDialog.hostname,
           old_ip: updateDialog.old_ip,
           new_ip: updateDialog.new_ip,
+          location: updateDialog.location,
           admin_password: adminPassword,
           admin_user: "admin",
         }
@@ -343,31 +361,39 @@ export default function NmapScanPage() {
     }
   };
 
-  const handleUpdateHostname = async (item: any, entityType: "system" | "pdu") => {
-    if (!item) return;
+  // Submit hostname update (system or PDU) — also sends location
+  const handleHostnameUpdate = async () => {
+    if (!hostnameUpdateDialog) return;
     try {
       const response = await axios.post(
         `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/update-hostname`,
         {
-          entity_id: item._id,
-          entity_type: entityType,
-          old_hostname: item.old_hostname,
-          new_hostname: item.new_hostname,
-          ip: item.ip,
+          entity_id: hostnameUpdateDialog._id,
+          entity_type: hostnameUpdateDialog.entity_type,
+          old_hostname: hostnameUpdateDialog.old_hostname,
+          new_hostname: hostnameUpdateDialog.new_hostname,
+          ip: hostnameUpdateDialog.ip,
+          location: hostnameUpdateDialog.location,
           admin_password: adminPassword,
           admin_user: "admin",
         }
       );
       if (response.data.status === "success") {
-        alert(`${entityType === "system" ? "System" : "PDU"} hostname updated successfully!`);
-        const key = entityType === "system" ? "changed_system_hostnames" : "changed_pdu_hostnames";
+        const label = hostnameUpdateDialog.entity_type === "system" ? "System" : "PDU";
+        alert(`${label} hostname updated successfully!`);
+        const key = hostnameUpdateDialog.entity_type === "system"
+          ? "changed_system_hostnames"
+          : "changed_pdu_hostnames";
         setScanData((prev: any) => ({
           ...prev,
           analysis: {
             ...prev.analysis,
-            [key]: prev.analysis[key].filter((i: any) => i._id !== item._id),
+            [key]: prev.analysis[key].filter(
+              (i: any) => i._id !== hostnameUpdateDialog._id
+            ),
           },
         }));
+        setHostnameUpdateDialog(null);
         fetchChangeLogs();
       }
     } catch (e: any) {
@@ -603,6 +629,7 @@ export default function NmapScanPage() {
                 {/* ── Analysis ──────────────────────────────────────────────── */}
                 {active === "Analysis" && (
                   <div className="space-y-4">
+
                     {/* New Systems */}
                     {scanData.analysis.new_systems.length > 0 && (
                       <Card>
@@ -630,7 +657,13 @@ export default function NmapScanPage() {
                                     <Button
                                       size="sm"
                                       disabled={!isUnlocked}
-                                      onClick={() => setCreateDialog({ hostname: device.hostname, ip: device.ip, type: "system" })}
+                                      onClick={() => setCreateDialog({
+                                        hostname: device.hostname,
+                                        ip: device.ip,
+                                        type: "system",
+                                        site: extractSite(device.hostname),
+                                        location: extractLocation(device.hostname),
+                                      })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Create
                                     </Button>
@@ -651,7 +684,7 @@ export default function NmapScanPage() {
                       </Card>
                     )}
 
-                    {/* Changed IPs */}
+                    {/* Changed System IPs */}
                     {scanData.analysis.changed_system_ips.length > 0 && (
                       <Card>
                         <CardHeader>
@@ -680,7 +713,11 @@ export default function NmapScanPage() {
                                     <Button
                                       size="sm"
                                       disabled={!isUnlocked}
-                                      onClick={() => setUpdateDialog(change)}
+                                      onClick={() => setUpdateDialog({
+                                        ...change,
+                                        site: extractSite(change.hostname),
+                                        location: extractLocation(change.hostname),
+                                      })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Update
                                     </Button>
@@ -732,7 +769,12 @@ export default function NmapScanPage() {
                                     <Button
                                       size="sm"
                                       disabled={!isUnlocked}
-                                      onClick={() => handleUpdateHostname(change, "system")}
+                                      onClick={() => setHostnameUpdateDialog({
+                                        ...change,
+                                        entity_type: "system",
+                                        site: extractSite(change.new_hostname),
+                                        location: extractLocation(change.new_hostname),
+                                      })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Update
                                     </Button>
@@ -782,7 +824,12 @@ export default function NmapScanPage() {
                                     <Button
                                       size="sm"
                                       disabled={!isUnlocked}
-                                      onClick={() => handleUpdateHostname(change, "pdu")}
+                                      onClick={() => setHostnameUpdateDialog({
+                                        ...change,
+                                        entity_type: "pdu",
+                                        site: extractSite(change.new_hostname),
+                                        location: extractLocation(change.new_hostname),
+                                      })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Update
                                     </Button>
@@ -838,7 +885,9 @@ export default function NmapScanPage() {
                                         type: "pdu",
                                         pdu_type: device.pdu_type,
                                         output_power_total_oid: device.default_oid || "",
-                                        sys_descr: device.sys_descr || ""
+                                        sys_descr: device.sys_descr || "",
+                                        site: extractSite(device.hostname),
+                                        location: extractLocation(device.hostname),
                                       })}
                                     >
                                       <Edit className="mr-1 h-3 w-3" /> Create
@@ -1108,7 +1157,7 @@ export default function NmapScanPage() {
                   </Card>
                 )}
 
-                {/* ── Disabled Devices ──────────────────────────────────────────── */}
+                {/* ── Disabled Devices ──────────────────────────────────────── */}
                 {active === "Disabled Devices" && (
                   <Card>
                     <CardHeader>
@@ -1209,7 +1258,7 @@ export default function NmapScanPage() {
           </div>
         </Modal>
 
-        {/* ── Update System Modal ───────────────────────────────────────────── */}
+        {/* ── Update System IP Modal ────────────────────────────────────────── */}
         <Modal
           open={!!updateDialog}
           onClose={closeDialogs}
@@ -1226,11 +1275,71 @@ export default function NmapScanPage() {
             <Field label="New IP">
               <Input value={updateDialog?.new_ip || ""} disabled />
             </Field>
+            <Field label="Site">
+              <Input
+                value={updateDialog?.site || ""}
+                onChange={(e) => setUpdateDialog({ ...updateDialog, site: e.target.value })}
+                placeholder="e.g., odcdh3"
+              />
+            </Field>
+            <Field label="Location">
+              <Input
+                value={updateDialog?.location || ""}
+                onChange={(e) => setUpdateDialog({ ...updateDialog, location: e.target.value })}
+                placeholder="e.g., b06"
+              />
+            </Field>
           </div>
           <ModalFooter
             onCancel={closeDialogs}
             onConfirm={handleUpdateSystem}
             confirmLabel="Update System"
+          />
+        </Modal>
+
+        {/* ── Update Hostname Modal (system & PDU) ──────────────────────────── */}
+        <Modal
+          open={!!hostnameUpdateDialog}
+          onClose={() => setHostnameUpdateDialog(null)}
+          title={`Update ${hostnameUpdateDialog?.entity_type === "system" ? "System" : "PDU"} Hostname`}
+          description="Confirm the hostname change and verify the location"
+        >
+          <div className="space-y-3">
+            <Field label="IP Address">
+              <Input value={hostnameUpdateDialog?.ip || ""} disabled />
+            </Field>
+            <Field label="Old Hostname">
+              <Input value={hostnameUpdateDialog?.old_hostname || ""} disabled />
+            </Field>
+            <Field label="New Hostname">
+              <Input
+                value={
+                  hostnameUpdateDialog?.entity_type === "system"
+                    ? cleanHostname(hostnameUpdateDialog?.new_hostname || "")
+                    : (hostnameUpdateDialog?.new_hostname || "")
+                }
+                disabled
+              />
+            </Field>
+            <Field label="Site">
+              <Input
+                value={hostnameUpdateDialog?.site || ""}
+                onChange={(e) => setHostnameUpdateDialog({ ...hostnameUpdateDialog, site: e.target.value })}
+                placeholder="e.g., odcdh3"
+              />
+            </Field>
+            <Field label="Location">
+              <Input
+                value={hostnameUpdateDialog?.location || ""}
+                onChange={(e) => setHostnameUpdateDialog({ ...hostnameUpdateDialog, location: e.target.value })}
+                placeholder="e.g., b06"
+              />
+            </Field>
+          </div>
+          <ModalFooter
+            onCancel={() => setHostnameUpdateDialog(null)}
+            onConfirm={handleHostnameUpdate}
+            confirmLabel="Update"
           />
         </Modal>
 
@@ -1257,12 +1366,14 @@ export default function NmapScanPage() {
             <Field label="Site" required>
               <Input
                 placeholder="e.g., odcdh1"
+                value={createDialog?.site || ""}
                 onChange={(e) => setCreateDialog({ ...createDialog, site: e.target.value })}
               />
             </Field>
             <Field label="Location" required>
               <Input
-                placeholder="e.g., a01"
+                placeholder="e.g., b06"
+                value={createDialog?.location || ""}
                 onChange={(e) => setCreateDialog({ ...createDialog, location: e.target.value })}
               />
             </Field>
@@ -1272,12 +1383,14 @@ export default function NmapScanPage() {
                 <Field label="BMC Username" required>
                   <Input
                     placeholder="root"
+                    value={createDialog?.username || ""}
                     onChange={(e) => setCreateDialog({ ...createDialog, username: e.target.value })}
                   />
                 </Field>
                 <Field label="BMC Password" required>
                   <Input
                     type="password"
+                    value={createDialog?.password || ""}
                     onChange={(e) => setCreateDialog({ ...createDialog, password: e.target.value })}
                   />
                 </Field>
