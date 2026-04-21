@@ -136,6 +136,11 @@ function ModalFooter({
   );
 }
 
+// ── Helper: strip BMC prefix/suffix from a hostname ──────────────────────────
+function cleanHostname(hostname: string): string {
+  return hostname.replace("bmc-", "").replace(".amd.com", "");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function NmapScanPage() {
@@ -280,7 +285,6 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("System updated successfully!");
-        // Remove from changed_system_ips list
         setScanData((prev: any) => ({
           ...prev,
           analysis: {
@@ -306,7 +310,6 @@ export default function NmapScanPage() {
         { entity_id: entityId, entity_type: entityType, admin_password: adminPassword, admin_user: "admin" }
       );
       alert("Moved to disabled successfully");
-      // Remove from not_detected list
       const key = entityType === "system" ? "not_detected_systems" : "not_detected_pdus";
       setScanData((prev: any) => {
         if (!prev) return prev;
@@ -357,7 +360,6 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert(`${entityType === "system" ? "System" : "PDU"} hostname updated successfully!`);
-        // Remove from changed hostnames list
         const key = entityType === "system" ? "changed_system_hostnames" : "changed_pdu_hostnames";
         setScanData((prev: any) => ({
           ...prev,
@@ -391,7 +393,6 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("System created successfully!");
-        // Remove from new_systems list
         setScanData((prev: any) => ({
           ...prev,
           analysis: {
@@ -427,7 +428,6 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("PDU created successfully!");
-        // Remove from new_pdus list
         setScanData((prev: any) => ({
           ...prev,
           analysis: {
@@ -459,11 +459,9 @@ export default function NmapScanPage() {
       );
       if (response.data.status === "success") {
         alert("Device ignored successfully!");
-        // Remove from all lists where it might appear
         setScanData((prev: any) => {
           if (!prev) return prev;
           const hostname = ignoreDialog.hostname.toLowerCase();
-          const deviceType = ignoreDialog.device_type;
           return {
             ...prev,
             analysis: {
@@ -727,7 +725,9 @@ export default function NmapScanPage() {
                                 <TableRow key={idx}>
                                   <TableCell>{change.ip}</TableCell>
                                   <TableCell className="text-gray-500">{change.old_hostname}</TableCell>
-                                  <TableCell className="font-medium">{change.new_hostname}</TableCell>
+                                  <TableCell className="font-medium">
+                                    {cleanHostname(change.new_hostname)}
+                                  </TableCell>
                                   <TableCell className="space-x-2">
                                     <Button
                                       size="sm"
@@ -832,9 +832,9 @@ export default function NmapScanPage() {
                                     <Button
                                       size="sm"
                                       disabled={!isUnlocked}
-                                      onClick={() => setCreateDialog({ 
-                                        hostname: device.hostname, 
-                                        ip: device.ip, 
+                                      onClick={() => setCreateDialog({
+                                        hostname: device.hostname,
+                                        ip: device.ip,
                                         type: "pdu",
                                         pdu_type: device.pdu_type,
                                         output_power_total_oid: device.default_oid || "",
@@ -860,7 +860,6 @@ export default function NmapScanPage() {
                       </Card>
                     )}
 
-                    {/* No changes */}
                     {/* Not Detected Systems */}
                     {scanData.analysis.not_detected_systems?.length > 0 && (
                       <Card>
@@ -971,6 +970,7 @@ export default function NmapScanPage() {
                       </Card>
                     )}
 
+                    {/* No changes */}
                     {scanData.analysis.new_systems.length === 0 &&
                       scanData.analysis.changed_system_ips.length === 0 &&
                       scanData.analysis.new_pdus.length === 0 &&
