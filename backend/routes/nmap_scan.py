@@ -272,18 +272,22 @@ def compare_with_database(scanned_devices):
     for d in scanned_devices["systems"]:
         bmc_hostname = d["hostname"].lower()
         ip = d["ip"]
-
+ 
+        # Clean the scanned BMC hostname to get the bare system name.
+        # e.g. "bmc-gbt350-odcdh5-wbb1-b.amd.com" → "gbt350-odcdh5-wbb1-b"
+        cleaned_bmc = bmc_hostname.replace("bmc-", "").replace(".amd.com", "")
+ 
         matched_by_name = None
         for system_name, system_record in systems_by_name.items():
-            if system_name in bmc_hostname:
+            # Exact match only — avoids "gbt350-odcdh5-wbb1" matching
+            # "gbt350-odcdh5-wbb1-b" as a substring.
+            if system_name == cleaned_bmc:
                 matched_by_name = system_record
                 break
-
+ 
         if matched_by_name:
-            # Matched by name — record as seen
             matched_system_ids.add(str(matched_by_name.get("_id")))
             matched_ips.add(ip)
-            # Update last_seen in DB
             db = Database()
             db.update(matched_by_name.get("_id"), {"last_seen": datetime.now()}, "systems")
             old_ip = matched_by_name.get("bmc_ip")
