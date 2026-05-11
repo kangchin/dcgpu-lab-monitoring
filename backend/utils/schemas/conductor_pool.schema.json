@@ -1,0 +1,17 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "conductor_pool.schema.json",
+    "type": "object",
+    "required": ["id", "name"],
+    "properties": {
+      "id": { "type": "string" },
+      "name": { "type": "string" },
+      "archived": { "type": "boolean" },
+      "exclusive": { "type": "boolean" },
+      "free_for_all": { "type": "boolean" },
+      "reservation_strategy": {
+        "type": "string",
+        "enum": ["calendar", "interactive"]
+      }
+    }
+  }
