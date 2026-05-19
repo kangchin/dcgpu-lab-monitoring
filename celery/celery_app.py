@@ -66,4 +66,8 @@ app.conf.beat_schedule = {
         "task": "tasks.cron.fetch_system_fan_speed_data",
         "schedule": timedelta(minutes=15),  # Run every 15 minutes to reduce the amount of data
     },
+    "sync_conductor_systems": {
+    "task": "tasks.cron.sync_conductor_systems",
+    "schedule": timedelta(minutes=30),
+    },
 }
