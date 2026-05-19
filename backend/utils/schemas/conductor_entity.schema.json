@@ -1,0 +1,75 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "conductor_entity.schema.json",
+    "type": "object",
+    "required": ["id", "name", "entity_type"],
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Unique entity identifier"
+      },
+  
+      "name": {
+        "type": "string"
+      },
+  
+      "entity_type": {
+        "type": "string",
+        "enum": [
+          "standalone_system",
+          "system_group",
+          "vm_group",
+          "rack",
+          "mini-rack",
+          "rack_manager",
+          "switch"
+        ]
+      },
+  
+      "allow_batch": {
+        "type": "boolean"
+      },
+  
+      "allow_reservations": {
+        "type": "boolean"
+      },
+  
+      "disabled": {
+        "type": "boolean"
+      },
+  
+      "disabled_by": {
+        "type": ["string", "null"]
+      },
+  
+      "disabled_reason": {
+        "type": ["string", "null"]
+      },
+  
+      "disabled_return_online_time": {
+        "type": ["string", "null"],
+        "format": "date-time"
+      },
+  
+      "pool_id": {
+        "type": ["string", "null"]
+      },
+  
+      "parent_entity_id": {
+        "type": ["string", "null"]
+      },
+  
+      "nodes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "description": "Child system_id or entity_id"
+        }
+      },
+  
+      "date_create": {
+        "type": ["string", "null"],
+        "format": "date-time"
+      }
+    }
+  }

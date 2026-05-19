@@ -31,6 +31,11 @@ from dotenv import load_dotenv
 import urllib3
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from pydantic import ValidationError
+from at_scale_python_api.database import SYSTEM_DB_CONTROLLER
+from at_scale_python_api.backend.systems import SystemController
+from ats_models.pydantic.conductor_query import ConductorQuery
+from utils.models.conductor_systems import ConductorSystems
 
 
 EXECUTOR = ThreadPoolExecutor(max_workers=20)  # Adjust based on needs
@@ -68,6 +73,248 @@ NORMAL_CHECK_INTERVAL = 300   # 5 minutes in seconds
 # Redis keys for tracking critical systems
 CRITICAL_SYSTEMS_KEY = "critical_temp_systems"
 LAST_CHECK_TIME_KEY = "system_temp_last_check"
+
+
+CONDUCTOR_MATCH_TERM = "odcdh"
+CONDUCTOR_ITEMS_PER_PAGE = 500
+
+
+NEEDED_FIELD_PATHS = [
+    "id",
+    "system_datas.name",
+    "system_datas.platform_config.power_controllers",
+    "system_device_data.power_distribution",
+]
+
+def _format_validation_errors(err: ValidationError, limit: int = 60) -> list:
+    out = []
+    try:
+        errors = err.errors()
+    except Exception:
+        return [str(err)]
+    for e in errors[:limit]:
+        loc = e.get("loc", [])
+        loc_str = ".".join(str(x) for x in loc) if loc else "<root>"
+        msg = e.get("msg", "")
+        typ = e.get("type", "")
+        out.append(f"{loc_str}: {msg} ({typ})")
+    if len(errors) > limit:
+        out.append(f"... truncated {len(errors) - limit} more validation error(s)")
+    return out
+
+def _build_best_effort_query(system_id: str) -> ConductorQuery:
+    """
+    Try to request only the needed fields (if ConductorQuery supports projections).
+    Falls back to ConductorQuery(id=...) if not supported.
+    """
+    model_fields = getattr(ConductorQuery, "model_fields", None) or getattr(ConductorQuery, "__fields__", None) or {}
+    supported = set(model_fields.keys())
+
+    candidates = []
+    if "fields" in supported:
+        candidates.append({"id": system_id, "fields": NEEDED_FIELD_PATHS})
+    if "projection" in supported:
+        candidates.append({"id": system_id, "projection": NEEDED_FIELD_PATHS})
+    if "include_fields" in supported:
+        candidates.append({"id": system_id, "include_fields": NEEDED_FIELD_PATHS})
+
+    candidates.append({"id": system_id})
+
+    for kwargs in candidates:
+        try:
+            return ConductorQuery(**kwargs)
+        except (TypeError, ValidationError):
+            continue
+
+    return ConductorQuery(id=system_id)
+
+def _extract_conn_type(obj) -> str | None:
+    """
+    ConnType from: system_device_data.power_distribution[*].type
+    Handles dict and list shapes.
+    """
+    try:
+        dev = getattr(obj, "system_device_data", None)
+        pd = getattr(dev, "power_distribution", None) if dev else None
+        if not pd:
+            return None
+
+        if isinstance(pd, dict):
+            for _, v in pd.items():
+                t = getattr(v, "type", None) if v else None
+                if t:
+                    return str(t)
+
+        if isinstance(pd, list):
+            for v in pd:
+                t = getattr(v, "type", None) if v else None
+                if t:
+                    return str(t)
+
+        t = getattr(pd, "type", None)
+        return str(t) if t else None
+
+    except Exception:
+        return None
+
+def _prune_none(d: dict) -> dict:
+    # avoids validator rejecting None for "string" typed fields
+    return {k: v for k, v in d.items() if v is not None}
+
+
+def parse_site_location(system_name: str):
+    """
+    Site is always the segment containing 'odcdh' (case-insensitive).
+    Location is the segment immediately after site.
+    Example: gt-png-odcdh3-b5-2  -> site=odcdh3, location=b5
+    """
+    parts = (system_name or "").split("-")
+    site = None
+    location = None
+
+    for i, p in enumerate(parts):
+        if "odcdh" in (p or "").lower():
+            site = p
+            location = parts[i + 1] if i + 1 < len(parts) else None
+            break
+
+    return site, location
+
+
+def extract_bmc_creds(full_system):
+    cfg = getattr(full_system.system_datas, "platform_config", None)
+    if not cfg:
+        return None, None, None
+
+    power_controllers = getattr(cfg, "power_controllers", None) or []
+    if not power_controllers:
+        return None, None, None
+
+    pc = power_controllers[0]
+
+    # Support dict or pydantic model
+    if isinstance(pc, dict):
+        ip = pc.get("ip")
+        user = pc.get("user") or pc.get("username")
+        pwd = pc.get("password") or pc.get("pass") or pc.get("pass_") or pc.get("passwd")
+        return ip, user, pwd
+
+    ip = getattr(pc, "ip", None)
+    user = getattr(pc, "user", None) or getattr(pc, "username", None)
+
+    # IMPORTANT: password may be stored as pass_ / pass due to schema mismatch
+    pwd = (
+        getattr(pc, "password", None)
+        or getattr(pc, "pass_", None)
+        or getattr(pc, "pass", None)
+        or getattr(pc, "passwd", None)
+    )
+
+    return ip, user, pwd
+
+
+def iter_conductor_stubs(items_per_page=CONDUCTOR_ITEMS_PER_PAGE):
+    page = 1
+    while True:
+        batch = SYSTEM_DB_CONTROLLER.get(page_num=page, items_per_page=items_per_page)
+        if not batch:
+            break
+        for s in batch:
+            yield s
+        page += 1
+
+
+@shared_task
+def sync_conductor_systems():
+    store = ConductorSystems()
+    sys_ctrl = SystemController()
+
+    total_stubs = 0
+    candidates = 0
+    upserts = 0
+    used_stub_fallback = 0
+    hydrated_ok = 0
+
+    for stub in iter_conductor_stubs():
+        total_stubs += 1
+        stub_name = (stub.system_datas.name or "").strip()
+
+        if CONDUCTOR_MATCH_TERM not in stub_name.lower():
+            continue
+
+        candidates += 1
+
+        system_obj = None
+        hydration_errors = None
+
+        # Try hydrate; on any failure fall back to stub (DO NOT SKIP)
+        try:
+            q = _build_best_effort_query(stub.id)
+            full = sys_ctrl.get(q)
+
+            if isinstance(full, list) and full:
+                system_obj = full[0]
+            elif full:
+                system_obj = full
+            else:
+                system_obj = stub
+                used_stub_fallback += 1
+                hydration_errors = ["hydration: empty response; used stub"]
+
+        except ValidationError as ve:
+            system_obj = stub
+            used_stub_fallback += 1
+            hydration_errors = _format_validation_errors(ve)
+
+        except Exception as e:
+            system_obj = stub
+            used_stub_fallback += 1
+            hydration_errors = [f"hydration_exception: {type(e).__name__}: {e}"]
+
+        # Extract fields
+        system_name = (getattr(system_obj.system_datas, "name", None) or stub_name).strip()
+        site, location = parse_site_location(system_name)
+
+        bmc_ip, username, password = extract_bmc_creds(system_obj)
+        if (bmc_ip, username, password) == (None, None, None):
+            bmc_ip, username, password = extract_bmc_creds(stub)
+
+        conn_type = _extract_conn_type(system_obj) or _extract_conn_type(stub)
+
+        record = _prune_none({
+            "system": system_name,
+            "site": site,
+            "location": location,
+            "bmc_ip": bmc_ip,
+            "username": username,
+            "password": password,
+            "conn_type": conn_type,
+        })
+
+        # Do the upsert (and fail loud if it errors)
+        store.upsert_by_system(system_name, record)
+        upserts += 1
+
+        if hydration_errors is None and system_obj is not stub:
+            hydrated_ok += 1
+        elif hydration_errors:
+            print(f"[Conductor sync] Stub fallback for {system_name}: {hydration_errors[:2]}")
+
+    print("Conductor sync summary:")
+    print(f"  total_stubs            : {total_stubs}")
+    print(f"  candidates             : {candidates}")
+    print(f"  upserts                : {upserts}")
+    print(f"  hydrated_ok            : {hydrated_ok}")
+    print(f"  used_stub_fallback     : {used_stub_fallback}")
+
+    return {
+        "total_stubs": total_stubs,
+        "candidates": candidates,
+        "upserts": upserts,
+        "hydrated_ok": hydrated_ok,
+        "used_stub_fallback": used_stub_fallback,
+    }
+
 
 def get_redis_lock_client():
     """Get Redis client for task locking"""

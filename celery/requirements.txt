@@ -6,3 +6,4 @@ puresnmp
 requests>=2.25.0
 paramiko>=3.0.0
 prometheus_client>=0.20.0
+pydantic>=2,<3

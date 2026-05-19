@@ -1,0 +1,17 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "conductor_reservation.schema.json",
+    "type": "object",
+    "required": ["id", "date_start", "date_end", "systems"],
+    "properties": {
+      "id": { "type": "string" },
+      "date_start": { "type": "string", "format": "date-time" },
+      "date_end": { "type": "string", "format": "date-time" },
+      "systems": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "pool_id": { "type": "string" },
+      "exclusive": { "type": "boolean" }
+    }
+  }

@@ -1,0 +1,60 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "conductor_system.schema.json",
+    "type": "object",
+    "required": ["id", "system_datas"],
+    "properties": {
+      "id": { "type": "string" },
+      "archived": { "type": "boolean" },
+      "date_create": { "type": "string", "format": "date-time" },
+  
+      "system_datas": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string" },
+          "hostname_ip": { "type": ["string", "null"] },
+  
+          "platform_config": {
+            "type": ["object", "null"],
+            "properties": {
+              "power_controllers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "ip": { "type": ["string", "null"] },
+                    "port": { "type": ["integer", "string", "null"] },
+                    "type": { "type": "string" },
+                    "user": { "type": ["string", "null"] },
+                    "password": { "type": ["string", "null"] }
+                  }
+                }
+              },
+              "power_distribution": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["hostname_ip_url", "outlet"],
+                  "properties": {
+                    "hostname_ip_url": { "type": "string" },
+                    "outlet": { "type": ["integer", "string"] },
+                    "user": { "type": "string" },
+                    "password": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+  
+      "system_device_data": {
+        "type": ["object", "null"],
+        "properties": {
+          "power_controllers": { "type": ["object", "null"] },
+          "power_distribution": { "type": ["object", "null"] }
+        }
+      }
+    }
+  }

@@ -1,0 +1,12 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "conductor_label.schema.json",
+    "type": "object",
+    "required": ["id", "name"],
+    "properties": {
+      "id": { "type": "string" },
+      "name": { "type": "string" },
+      "description": { "type": ["string", "null"] },
+      "date_create": { "type": "string", "format": "date-time" }
+    }
+  }
