@@ -67,6 +67,18 @@ const items = [
         title: "Data Hall 3",
         url: "/opendc/dh3",
         activeIndicator: "",
+        subitems: [
+          {
+            title: "Overview",
+            url: "/opendc/dh3",
+            activeIndicator: "",
+          },
+          {
+            title: "Temperature Monitoring",
+            url: "/opendc/dh3/temperature",
+            activeIndicator: "",
+          },
+        ],
       },
       {
         title: "Data Hall 4",
@@ -113,20 +125,55 @@ export function AppSidebar() {
                       </div>
                     </Slot>
                     <SidebarMenuSub>
-                      {item.subitems.map((subitem) => (
-                        <Fragment key={subitem.title}>
-                          <SidebarMenuSubItem>
-                            <SidebarMenuSubButton
-                              asChild
-                              isActive={subitem.url == pathname}
-                            >
-                              <a href={subitem.url}>
-                                <span>{subitem.title}</span>
-                              </a>
-                            </SidebarMenuSubButton>
-                          </SidebarMenuSubItem>
-                        </Fragment>
-                      ))}
+                      {item.subitems.map((subitem) =>
+                        subitem.subitems ? (
+                          // Handle nested subitems (e.g., DH3 Temperature)
+                          <Fragment key={subitem.title}>
+                            <SidebarMenuSubItem>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={subitem.url == pathname}
+                              >
+                                <a href={subitem.url}>
+                                  <span>{subitem.title}</span>
+                                </a>
+                              </SidebarMenuSubButton>
+                              {/* Nested sub-subitems */}
+                              <SidebarMenuSub>
+                                {subitem.subitems.map((nestedItem) => (
+                                  <SidebarMenuSubItem key={nestedItem.title}>
+                                    <SidebarMenuSubButton
+                                      asChild
+                                      isActive={nestedItem.url == pathname}
+                                      className="pl-8"
+                                    >
+                                      <a href={nestedItem.url}>
+                                        <span className="text-xs">
+                                          {nestedItem.title}
+                                        </span>
+                                      </a>
+                                    </SidebarMenuSubButton>
+                                  </SidebarMenuSubItem>
+                                ))}
+                              </SidebarMenuSub>
+                            </SidebarMenuSubItem>
+                          </Fragment>
+                        ) : (
+                          // Regular subitems
+                          <Fragment key={subitem.title}>
+                            <SidebarMenuSubItem>
+                              <SidebarMenuSubButton
+                                asChild
+                                isActive={subitem.url == pathname}
+                              >
+                                <a href={subitem.url}>
+                                  <span>{subitem.title}</span>
+                                </a>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          </Fragment>
+                        ),
+                      )}
                     </SidebarMenuSub>
                   </Fragment>
                 ) : (
