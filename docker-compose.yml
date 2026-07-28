@@ -27,7 +27,7 @@ services:
     ports:
       - "5000:5000"
     env_file:
-      - ./backend/.env
+      - .env
     volumes:
       - ./backend/data:/app/data
     # Linux-specific: Use host network for nmap to access LAN
@@ -51,7 +51,7 @@ services:
     command: celery -A celery_app worker -B --loglevel=INFO
     restart: unless-stopped
     env_file:
-      - ./celery/.env
+      - .env
     volumes:
       - metrics_dir:/metrics
     depends_on:
@@ -65,7 +65,7 @@ services:
     ports:
       - "9200:9200"
     env_file:
-      - ./celery/.env
+      - .env
     volumes:
       - metrics_dir:/metrics:ro
     depends_on:
@@ -87,7 +87,7 @@ services:
       - "traefik.http.routers.frontend.tls.certresolver=myresolver"
       - "traefik.http.services.frontend.loadbalancer.server.port=3005"
     env_file:
-      - ./frontend/.env
+      - .env
     depends_on:
       - backend
 
