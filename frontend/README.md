@@ -1,5 +1,11 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Local Full-Stack Run (No Docker)
+
+For running the full project locally on Windows (backend, frontend, Redis, Celery worker, Celery beat), see:
+
+- ../RUN_LOCAL_WINDOWS.md
+
 ## Getting Started
 
 First, run the development server:
