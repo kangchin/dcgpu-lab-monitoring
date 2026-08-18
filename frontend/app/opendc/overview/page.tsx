@@ -162,7 +162,7 @@ export default function OpenDCOverview() {
               {exitDefs.map(({key, r, rotate}) => (
                 <g key={key}>
                   <rect x={r.x} y={r.y} width={r.w} height={r.h} fill="#16a34a" stroke={c.wallStroke} strokeWidth="0.5" rx="1"/>
-                  <text x={r.x+r.w/2} y={r.y+r.h/2+(rotate?0:1.5)} fill="#ffffff" fontSize="4" fontWeight="700"
+                  <text x={r.x+r.w/2} y={r.y+r.h/2+(rotate?0:0.5)} fill="#ffffff" fontSize="4" fontWeight="700"
                     textAnchor="middle"
                     transform={rotate?`rotate(-90,${r.x+r.w/2},${r.y+r.h/2})`:undefined}
                     letterSpacing={rotate?"1":undefined}>EXIT</text>

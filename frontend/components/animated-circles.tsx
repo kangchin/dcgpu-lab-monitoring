@@ -10,8 +10,8 @@ interface AnimatedCirclesProps {
 
 export function AnimatedCircles({
   color,
-  width = 75,
-  height = 10,
+  width = 220,
+  height = 60,
   startX,
   startY,
 }: AnimatedCirclesProps) {
@@ -26,7 +26,7 @@ export function AnimatedCircles({
     const dx_end = (Math.random() * 15).toFixed(2);
     const dy_end = (Math.random() * 15).toFixed(2);
 
-    const opacities = Array.from({ length: 4 })
+    const opacities = Array.from({ length: 500 })
       .map(() => Math.random().toFixed(2))
       .join(";");
     const opacityValues = `0;${opacities};0`;
