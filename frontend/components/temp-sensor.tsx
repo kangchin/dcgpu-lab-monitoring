@@ -30,7 +30,7 @@ const TempSensor = ({
           <circle
             cx={cx}
             cy={cy}
-            r="4"
+            r="10"
             opacity={theme == "dark" ? 0.6 : 1}
             className={
               temperature == null
