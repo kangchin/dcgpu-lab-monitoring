@@ -25,7 +25,7 @@ export default function RootLayout({
           <SidebarProvider>
             <AppSidebar />
             <main className="w-full min-h-screen bg-background dark:bg-background-dark text-text dark:text-text-dark">
-              <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-20 pb-20">
+              <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-20">
                 {children}
               </div>
             </main>

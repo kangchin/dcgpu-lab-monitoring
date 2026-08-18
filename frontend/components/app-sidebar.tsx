@@ -54,6 +54,11 @@ const items = [
     icon: Factory,
     subitems: [
       {
+        title: "Overview",
+        url: "/opendc/overview",
+        activeIndicator: "",
+      },
+      {
         title: "Data Hall 1",
         url: "/opendc/dh1",
         activeIndicator: "",
