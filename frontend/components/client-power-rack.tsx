@@ -1,7 +1,7 @@
 "use client";
 import axios from "axios";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/utils";
 import { ExternalLink } from "lucide-react";
@@ -97,6 +97,7 @@ export default function ClientPowerRack({
       setAllPowerLoading(false);
     } catch (e) {
       console.log(e);
+      setAllPowerLoading(false);
     }
   };
 
@@ -135,22 +136,23 @@ export default function ClientPowerRack({
     }
   };
 
-  const getSystems = async () => {
+  const getSystems = useCallback(async () => {
+    setSystemsLoading(true);
     try {
-      const response = await axios.get(
-        `/api/systems?site=${site}&location=${rack}`
-      );
+      const url = `/api/conductor/systems?locale=Penang%20OpenDC&site=${site}&data_hall=${datahall}&rack=${rack}`;
+      const response = await axios.get(url);
       if (response && response.status === 200) {
-        setSystems(response.data || []);
+        setSystems(response.data?.systems || []);
       } else {
         setSystems([]);
       }
-      setSystemsLoading(false);
-    } catch (e) {
+    } catch (error) {
+      console.error("Failed to fetch systems:", error);
       setSystems([]);
+    } finally {
       setSystemsLoading(false);
     }
-  };
+  }, [site, datahall, rack]);
 
   //EFFECTS
   useEffect(() => {
@@ -177,7 +179,11 @@ export default function ClientPowerRack({
 
   useEffect(() => {
     getSystems();
-  }, [site, rack]);
+  }, [getSystems]);
+
+  useEffect(() => {
+    console.log("Component props:", { site, datahall, rack });
+  }, [site, datahall, rack]);
 
   return (
     <>
@@ -197,12 +203,12 @@ export default function ClientPowerRack({
                   {systems.map((system, idx) => (
                     <li key={idx} className="text-sm font-light">
                       <a
-                        href={`https://conductor.amd.com/system/management?page=0&pageSize=25&filter=${encodeURIComponent(system.system)}`}
+                        href={`https://conductor.amd.com/system/management?page=0&pageSize=25&filter=${encodeURIComponent(system.name)}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-blue-600 underline hover:text-blue-800"
                       >
-                        {system.system}
+                    {system.name}
                       </a>
                     </li>
                   ))}

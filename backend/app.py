@@ -1,8 +1,14 @@
+import os
+from dotenv import load_dotenv
 from flask import Flask
+from flask import jsonify
+from routes.conductor_system import conductor_system
+
+load_dotenv()
 from routes.power import power
 from routes.temperature import temperature
 from routes.dashboard import dashboard
-from routes.systems import systems
+# from routes.systems import systems  # temporarily hidden
 from routes.monthly_data import monthly_data
 from routes.system_temperature import system_temperature
 from routes.power_capacity import power_capacity
@@ -15,11 +21,32 @@ CORS(
     origins="*",
 )
 
+app.config.update(
+    CONDUCTOR_BASE_URL=os.environ.get("CONDUCTOR_BASE_URL", "https://conductor.amd.com"),
+    CONDUCTOR_API_ENDPOINT=os.environ.get("CONDUCTOR_API_ENDPOINT", "/api/v1/amdql"),
+    CONDUCTOR_API_TOKEN=os.environ.get("CONDUCTOR_API_TOKEN", ""),
+    CONDUCTOR_EMAIL=os.environ.get("CONDUCTOR_EMAIL", ""),
+    CONDUCTOR_AUTH_FORMAT=os.environ.get("CONDUCTOR_AUTH_FORMAT", "email_key"),
+    CONDUCTOR_AUTH_SCHEME=os.environ.get("CONDUCTOR_AUTH_SCHEME", "Bearer"),
+    CONDUCTOR_TOKEN_HEADER=os.environ.get("CONDUCTOR_TOKEN_HEADER", "Authorization"),
+    CONDUCTOR_SYSTEM_QUERY_PARAM=os.environ.get("CONDUCTOR_SYSTEM_QUERY_PARAM", "system"),
+    CONDUCTOR_VERIFY_SSL=os.environ.get("CONDUCTOR_VERIFY_SSL", "true").lower() not in ("false", "0"),
+    CONDUCTOR_CA_BUNDLE_PATH=os.environ.get("CONDUCTOR_CA_BUNDLE_PATH", ""),
+    CONDUCTOR_TIMEOUT_SECONDS=int(os.environ.get("CONDUCTOR_TIMEOUT_SECONDS", "20")),
+    PING_TIMEOUT_SECONDS=int(os.environ.get("PING_TIMEOUT_SECONDS", "15")),
+    SSH_KEY_PATH=os.environ.get("SSH_KEY_PATH", ""),
+    SSH_USERNAME=os.environ.get("SSH_USERNAME", "root"),
+    SSH_TIMEOUT_SECONDS=int(os.environ.get("SSH_TIMEOUT_SECONDS", "10")),
+    SSH_DEFAULT_USERNAME=os.environ.get("SSH_DEFAULT_USERNAME", "root"),
+    SSH_DEFAULT_PASSWORD=os.environ.get("SSH_DEFAULT_PASSWORD", ""),
+)
+
+app.register_blueprint(conductor_system, url_prefix="/api/conductor")
 app.register_blueprint(system_temperature, url_prefix="/api/system-temperature")
 app.register_blueprint(power, url_prefix="/api/power")
 app.register_blueprint(temperature, url_prefix="/api/temperature")
 app.register_blueprint(dashboard, url_prefix="/api/dashboard")
-app.register_blueprint(systems, url_prefix="/api/systems")
+# app.register_blueprint(systems, url_prefix="/api/systems")  # temporarily hidden
 app.register_blueprint(monthly_data, url_prefix="/api/monthly-power-data")
 app.register_blueprint(power_capacity, url_prefix="/api/power-capacity")
 app.register_blueprint(nmap_scan, url_prefix="/api/nmap-scan")
@@ -37,6 +64,66 @@ def openapi_spec():
         },
         "servers": [{"url": "http://localhost:5000", "description": "Local Development"}],
         "paths": {
+            "/api/conductor/systems": {
+                "get": {
+                    "summary": "List Systems by Site / Data Hall / Rack / Level",
+                    "description": "Fetch all systems in a locale and filter by site, data hall, rack and/or level parsed from the system name convention `{model}-{site}{dh}-{rack}-{level}`.",
+                    "tags": ["Conductor"],
+                    "parameters": [
+                        {"name": "locale",    "in": "query", "required": False, "schema": {"type": "string", "default": "Penang OpenDC"}, "description": "Locale to fetch from (default: Penang OpenDC)"},
+                        {"name": "site",      "in": "query", "required": False, "schema": {"type": "string", "example": "odc"},          "description": "Site code, e.g. odc"},
+                        {"name": "data_hall", "in": "query", "required": False, "schema": {"type": "string", "example": "dh1"},          "description": "Data hall, e.g. dh1"},
+                        {"name": "rack",      "in": "query", "required": False, "schema": {"type": "string", "example": "a01"},          "description": "Rack ID, e.g. a01"},
+                        {"name": "level",     "in": "query", "required": False, "schema": {"type": "string", "example": "1"},            "description": "Level, e.g. 1"}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Filtered list of systems with parsed metadata",
+                            "content": {"application/json": {"example": {"locale": "Penang OpenDC", "count": 2, "systems": [{"name": "gbt350-odcdh1-a01-1", "model": "gbt350", "site": "odc", "data_hall": "dh1", "rack": "a01", "level": "1"}]}}}
+                        },
+                        "504": {"description": "Conductor API timed out"},
+                        "502": {"description": "Conductor client error"}
+                    }
+                }
+            },
+            "/api/conductor/list-systems": {
+                "get": {
+                    "summary": "List Systems by Locale",
+                    "description": "Return all system names from Conductor filtered by locale name (e.g. 'Penang OpenDC'). Paginates automatically.",
+                    "tags": ["Conductor"],
+                    "parameters": [
+                        {"name": "locale", "in": "query", "required": True, "schema": {"type": "string", "example": "Penang OpenDC"}, "description": "Locale name to filter by (e.g. 'Penang OpenDC')"}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "List of systems in the locale",
+                            "content": {"application/json": {"example": {"locale": "Penang OpenDC", "count": 314, "systems": ["gbt350-odcdh1-a01-1", "gbt350-odcdh1-a01-2"]}}}
+                        },
+                        "400": {"description": "Missing locale parameter"},
+                        "504": {"description": "Conductor API timed out"},
+                        "502": {"description": "Conductor client error"}
+                    }
+                }
+            },
+            "/api/conductor/system/raw-data": {
+                "get": {
+                    "summary": "Get System Data",
+                    "description": "Retrieve complete system health data from Conductor",
+                    "tags": ["Conductor"],
+                    "parameters": [
+                        {"name": "system_name", "in": "query", "required": True, "schema": {"type": "string", "example": "gbt350-odcdh1-a01-1"}, "description": "Name of the system to query from Conductor"}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "System health data",
+                            "content": {"application/json": {"example": {"details": {"name": "gbt350-odcdh1-a01-1", "status": "healthy"}}}}
+                        },
+                        "400": {"description": "Missing system_name parameter"},
+                        "504": {"description": "Conductor API timed out"},
+                        "502": {"description": "Conductor client error"}
+                    }
+                }
+            },
             "/api/dashboard": {
                 "get": {
                     "summary": "Get Total Power by Site",
@@ -120,18 +207,18 @@ def openapi_spec():
                     "responses": {"200": {"description": "Latest temperature readings"}}
                 }
             },
-            "/api/systems": {
-                "get": {
-                    "summary": "Get Systems List",
-                    "description": "List all monitored systems with optional filtering",
-                    "tags": ["Systems"],
-                    "parameters": [
-                        {"name": "site", "in": "query", "schema": {"type": "string", "example": "odcdh1"}, "description": "Site filter (e.g., odcdh1, odcdh2)"},
-                        {"name": "location", "in": "query", "schema": {"type": "string", "example": "a01-1"}, "description": "Location filter (e.g., a01-1)"}
-                    ],
-                    "responses": {"200": {"description": "Systems array"}}
-                }
-            },
+            # "/api/systems": {
+            #     "get": {
+            #         "summary": "Get Systems List",
+            #         "description": "List all monitored systems with optional filtering",
+            #         "tags": ["Systems"],
+            #         "parameters": [
+            #             {"name": "site", "in": "query", "schema": {"type": "string", "example": "odcdh1"}, "description": "Site filter (e.g., odcdh1, odcdh2)"},
+            #             {"name": "location", "in": "query", "schema": {"type": "string", "example": "a01-1"}, "description": "Location filter (e.g., a01-1)"}
+            #         ],
+            #         "responses": {"200": {"description": "Systems array"}}
+            #     }
+            # },
             "/api/system-temperature": {
                 "get": {
                     "summary": "Get System Temperatures",
@@ -264,6 +351,67 @@ def openapi_spec():
                     "responses": {"200": {"description": "Missing months calculation"}}
                 }
             },
+            "/api/nmap-scan/list-pdus": {
+                "get": {
+                    "summary": "List PDUs by Domain",
+                    "description": "Discover PDU hostnames and IP addresses via nmap reverse-DNS list scan of 10.145.0.0/16, filtered to the amd.com domain.",
+                    "tags": ["Network Scanning"],
+                    "responses": {
+                        "200": {
+                            "description": "Discovered PDU hostnames with IP addresses",
+                            "content": {"application/json": {"example": {"status": "success", "count": 2, "pdus": [{"hostname": "pdu-odcdh1-a01.amd.com", "ip": "10.145.69.10"}, {"hostname": "pdu-odcdh1-a04.amd.com", "ip": "10.145.69.13"}]}}}
+                        },
+                        "504": {"description": "nmap list scan timed out"},
+                        "500": {"description": "nmap execution error"}
+                    }
+                }
+            },
+            "/api/nmap-scan/scan": {
+                "post": {
+                    "summary": "Scan Configured Networks",
+                    "description": "Scan the configured DCGPU networks with nmap -sn -R, filter ignored devices, and compare results with the local database. Networks are fixed by the backend.",
+                    "tags": ["Network Scanning"],
+                    "responses": {
+                        "200": {
+                            "description": "Scan results and database comparison",
+                            "content": {"application/json": {"example": {
+                                "status": "success",
+                                "scanned_devices": {
+                                    "systems": [{"hostname": "gbt350-odcdh1-a01-1.amd.com", "ip": "10.145.69.10"}],
+                                    "pdus": [{"hostname": "pdu-odcdh1-a01.amd.com", "ip": "10.145.69.11"}],
+                                    "non_standard": [],
+                                    "no_hostname": []
+                                },
+                                "analysis": {
+                                    "new_systems": [], "new_pdus": [],
+                                    "changed_system_ips": [], "changed_pdu_ips": [],
+                                    "changed_system_hostnames": [], "changed_pdu_hostnames": [],
+                                    "possible_system_resets": [], "possible_pdu_resets": [],
+                                    "not_detected_systems": [], "not_detected_pdus": []
+                                }
+                            }}}
+                        },
+                        "503": {"description": "nmap executable unavailable"},
+                        "500": {"description": "Scan or database comparison error"}
+                    }
+                }
+            },
+            "/api/nmap-scan/list-devices": {
+                "get": {
+                    "summary": "List AMD Devices",
+                    "description": "List all reverse-DNS device hostnames containing amd.com from nmap -sL 10.145.0.0/16.",
+                    "tags": ["Network Scanning"],
+                    "responses": {
+                        "200": {
+                            "description": "Device hostnames with IP addresses",
+                            "content": {"application/json": {"example": {"status": "success", "count": 2, "devices": [{"hostname": "pdu-odcdh1-a01.amd.com", "ip": "10.145.69.10"}, {"hostname": "gbt350-odcdh1-a01-1.amd.com", "ip": "10.145.69.11"}]}}}
+                        },
+                        "503": {"description": "nmap executable unavailable"},
+                        "504": {"description": "nmap list scan timed out"},
+                        "500": {"description": "nmap execution error"}
+                    }
+                }
+            },
             "/api/nmap-scan/validate-password": {
                 "post": {
                     "summary": "Validate Admin Password",
@@ -364,4 +512,4 @@ def swagger_ui():
     return html
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000, threaded=True)
