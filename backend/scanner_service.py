@@ -107,10 +107,9 @@ def run_scan():
         # Get networks from request or use defaults
         data = request.get_json() or {}
         networks = data.get('networks', [
-            "10.145.68.0/24",
-            "10.145.69.0/24",
-            "10.145.70.0/24", 
             "10.145.71.0/24",
+            "10.145.70.0/24", 
+            "10.145.69.0/24",
             "10.145.132.0/24",
             "10.145.133.0/24",
             "10.145.135.0/24"

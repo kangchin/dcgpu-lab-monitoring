@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import Blueprint, jsonify, request
-# from utils.models.systems import Systems
+from utils.models.systems import Systems
 from utils.models.pdu import PDU
 from utils.models.change_log import ChangeLog
 from utils.models.ignored_device import IgnoredDevice
@@ -228,11 +228,26 @@ def filter_ignored_devices(scanned_devices):
 # -------------------------------------------------------------------
 
 def compare_with_database(scanned_devices):
-    """
-    Compare scanned devices with database records.
-    Systems model is disabled, so we return a basic empty analysis.
-    This function is only used by the /scan endpoint which is not required for main features.
-    """
+    systems_model = Systems()
+    pdu_model = PDU()
+
+    tracked_systems = systems_model.find({})
+    tracked_pdus = pdu_model.find({})
+
+    # Build lookups
+    systems_by_name = {
+        s.get("system", "").lower(): s
+        for s in tracked_systems
+        if s.get("system")
+    }
+    systems_by_ip = {
+        s.get("bmc_ip"): s
+        for s in tracked_systems
+        if s.get("bmc_ip")
+    }
+    pdus_by_name = {p.get("hostname", "").lower(): p for p in tracked_pdus}
+    pdus_by_ip = {p.get("ip"): p for p in tracked_pdus if p.get("ip")}
+
     analysis = {
         "new_systems": [],
         "new_pdus": [],
@@ -245,6 +260,140 @@ def compare_with_database(scanned_devices):
         "not_detected_systems": [],
         "not_detected_pdus": [],
     }
+
+    # Track which DB records were matched during this scan
+    matched_system_ids = set()
+    matched_pdu_names = set()
+    matched_ips = set()
+
+    # ----------------------------
+    # Systems (BMC hostname logic)
+    # ----------------------------
+    for d in scanned_devices["systems"]:
+        bmc_hostname = d["hostname"].lower()
+        ip = d["ip"]
+ 
+        # Clean the scanned BMC hostname to get the bare system name.
+        # e.g. "bmc-gbt350-odcdh5-wbb1-b.amd.com" → "gbt350-odcdh5-wbb1-b"
+        cleaned_bmc = bmc_hostname.replace("bmc-", "").replace(".amd.com", "")
+ 
+        matched_by_name = None
+        for system_name, system_record in systems_by_name.items():
+            # Exact match only — avoids "gbt350-odcdh5-wbb1" matching
+            # "gbt350-odcdh5-wbb1-b" as a substring.
+            if system_name == cleaned_bmc:
+                matched_by_name = system_record
+                break
+ 
+        if matched_by_name:
+            matched_system_ids.add(str(matched_by_name.get("_id")))
+            matched_ips.add(ip)
+            db = Database()
+            db.update(matched_by_name.get("_id"), {"last_seen": datetime.now()}, "systems")
+            old_ip = matched_by_name.get("bmc_ip")
+            if old_ip and old_ip != ip:
+                analysis["changed_system_ips"].append({
+                    "hostname": matched_by_name.get("system"),
+                    "old_ip": old_ip,
+                    "new_ip": ip,
+                    "_id": matched_by_name.get("_id")
+                })
+        elif ip in systems_by_ip:
+            # IP matches but hostname doesn't — hostname changed
+            matched_by_ip = systems_by_ip[ip]
+            matched_system_ids.add(str(matched_by_ip.get("_id")))
+            matched_ips.add(ip)
+            db = Database()
+            db.update(matched_by_ip.get("_id"), {"last_seen": datetime.now()}, "systems")
+            analysis["changed_system_hostnames"].append({
+                "ip": ip,
+                "old_hostname": matched_by_ip.get("system"),
+                "new_hostname": d["hostname"],
+                "_id": matched_by_ip.get("_id")
+            })
+        else:
+            # Neither name nor IP match — truly new
+            analysis["new_systems"].append(d)
+
+    # ----------------------------
+    # Possible system resets
+    # ----------------------------
+    for d in scanned_devices["non_standard"] + scanned_devices["no_hostname"]:
+        ip = d["ip"]
+        if ip in systems_by_ip and ip not in matched_ips:
+            s = systems_by_ip[ip]
+            matched_system_ids.add(str(s.get("_id")))
+            matched_ips.add(ip)
+            analysis["possible_system_resets"].append({
+                "ip": ip,
+                "expected_hostname": s.get("system"),
+                "current_hostname": d.get("hostname")
+            })
+
+    # ----------------------------
+    # PDUs
+    # ----------------------------
+    matched_pdu_ids = set()
+
+    for d in scanned_devices["pdus"]:
+        hostname = d["hostname"]
+        name = hostname.lower()
+        ip = d["ip"]
+
+        if name in pdus_by_name:
+            pdu_record = pdus_by_name[name]
+            matched_pdu_ids.add(str(pdu_record.get("_id")))
+            db = Database()
+            db.update(pdu_record.get("_id"), {"last_seen": datetime.now()}, "pdus")
+        elif ip in pdus_by_ip:
+            matched_pdu = pdus_by_ip[ip]
+            matched_pdu_ids.add(str(matched_pdu.get("_id")))
+            db = Database()
+            db.update(matched_pdu.get("_id"), {"last_seen": datetime.now()}, "pdus")
+            analysis["changed_pdu_hostnames"].append({
+                "ip": ip,
+                "old_hostname": matched_pdu.get("hostname"),
+                "new_hostname": hostname,
+                "_id": matched_pdu.get("_id")
+            })
+        else:
+            # Add PDU type detection info via SNMP
+            pdu_info = detect_pdu_type(hostname, ip)
+            analysis["new_pdus"].append({
+                **d,
+                "pdu_type": pdu_info["type"],
+                "default_oid": pdu_info["default_oid"],
+                "sys_descr": pdu_info.get("sys_descr", "")
+            })
+
+    # ----------------------------
+    # Not detected — in DB but not seen this scan
+    # ----------------------------
+    two_weeks_ago = datetime.now() - timedelta(weeks=2)
+
+    for s in tracked_systems:
+        sid = str(s.get("_id"))
+        if sid not in matched_system_ids:
+            last_seen = s.get("last_seen")
+            analysis["not_detected_systems"].append({
+                "_id": sid,
+                "hostname": s.get("system"),
+                "bmc_ip": s.get("bmc_ip"),
+                "last_seen": last_seen.isoformat() if isinstance(last_seen, datetime) else last_seen,
+                "overdue": last_seen is not None and last_seen < two_weeks_ago,
+            })
+
+    for p in tracked_pdus:
+        pid = str(p.get("_id"))
+        if pid not in matched_pdu_ids:
+            last_seen = p.get("last_seen")
+            analysis["not_detected_pdus"].append({
+                "_id": pid,
+                "hostname": p.get("hostname"),
+                "last_seen": last_seen.isoformat() if isinstance(last_seen, datetime) else last_seen,
+                "overdue": last_seen is not None and last_seen < two_weeks_ago,
+            })
+
     return analysis
 
 
@@ -760,13 +909,12 @@ def restore_from_disabled():
 @nmap_scan.route("/scan", methods=["POST"])
 def run_nmap_scan():
     networks = [
-        "10.145.68.0/24",
-        "10.145.69.0/24",
-        "10.145.70.0/24", 
         "10.145.71.0/24",
+        "10.145.70.0/24",
+        "10.145.69.0/24",
         "10.145.132.0/24",
         "10.145.133.0/24",
-        "10.145.135.0/24"
+        "10.145.135.0/24",
     ]
 
     try:
