@@ -1,12 +1,17 @@
-from flask import Flask
+import os
+from dotenv import load_dotenv
+from flask import Flask, jsonify
+from flask_cors import CORS
+
+load_dotenv()
+
+from routes.conductor_system import conductor_system
 from routes.power import power
 from routes.temperature import temperature
 from routes.dashboard import dashboard
-from routes.systems import systems
 from routes.monthly_data import monthly_data
 from routes.system_temperature import system_temperature
 from routes.power_capacity import power_capacity
-from flask_cors import CORS
 from routes.nmap_scan import nmap_scan
 
 app = Flask(__name__)
@@ -15,11 +20,31 @@ CORS(
     origins="*",
 )
 
+app.config.update(
+    CONDUCTOR_BASE_URL=os.environ.get("CONDUCTOR_BASE_URL", "https://conductor.amd.com"),
+    CONDUCTOR_API_ENDPOINT=os.environ.get("CONDUCTOR_API_ENDPOINT", "/api/v1/amdql"),
+    CONDUCTOR_API_TOKEN=os.environ.get("CONDUCTOR_API_TOKEN", ""),
+    CONDUCTOR_EMAIL=os.environ.get("CONDUCTOR_EMAIL", ""),
+    CONDUCTOR_AUTH_FORMAT=os.environ.get("CONDUCTOR_AUTH_FORMAT", "email_key"),
+    CONDUCTOR_AUTH_SCHEME=os.environ.get("CONDUCTOR_AUTH_SCHEME", "Bearer"),
+    CONDUCTOR_TOKEN_HEADER=os.environ.get("CONDUCTOR_TOKEN_HEADER", "Authorization"),
+    CONDUCTOR_SYSTEM_QUERY_PARAM=os.environ.get("CONDUCTOR_SYSTEM_QUERY_PARAM", "system"),
+    CONDUCTOR_VERIFY_SSL=os.environ.get("CONDUCTOR_VERIFY_SSL", "true").lower() not in ("false", "0"),
+    CONDUCTOR_CA_BUNDLE_PATH=os.environ.get("CONDUCTOR_CA_BUNDLE_PATH", ""),
+    CONDUCTOR_TIMEOUT_SECONDS=int(os.environ.get("CONDUCTOR_TIMEOUT_SECONDS", "20")),
+    PING_TIMEOUT_SECONDS=int(os.environ.get("PING_TIMEOUT_SECONDS", "15")),
+    SSH_KEY_PATH=os.environ.get("SSH_KEY_PATH", ""),
+    SSH_USERNAME=os.environ.get("SSH_USERNAME", "root"),
+    SSH_TIMEOUT_SECONDS=int(os.environ.get("SSH_TIMEOUT_SECONDS", "10")),
+    SSH_DEFAULT_USERNAME=os.environ.get("SSH_DEFAULT_USERNAME", "root"),
+    SSH_DEFAULT_PASSWORD=os.environ.get("SSH_DEFAULT_PASSWORD", ""),
+)
+
+app.register_blueprint(conductor_system, url_prefix="/api/conductor")
 app.register_blueprint(system_temperature, url_prefix="/api/system-temperature")
 app.register_blueprint(power, url_prefix="/api/power")
 app.register_blueprint(temperature, url_prefix="/api/temperature")
 app.register_blueprint(dashboard, url_prefix="/api/dashboard")
-app.register_blueprint(systems, url_prefix="/api/systems")
 app.register_blueprint(monthly_data, url_prefix="/api/monthly-power-data")
 app.register_blueprint(power_capacity, url_prefix="/api/power-capacity")
 app.register_blueprint(nmap_scan, url_prefix="/api/nmap-scan")
@@ -37,6 +62,66 @@ def openapi_spec():
         },
         "servers": [{"url": "http://localhost:5000", "description": "Local Development"}],
         "paths": {
+            "/api/conductor/systems": {
+                "get": {
+                    "summary": "List Systems by Site / Data Hall / Rack / Level",
+                    "description": "Fetch all systems in a locale and filter by site, data hall, rack and/or level parsed from the system name convention `{model}-{site}{dh}-{rack}-{level}`.",
+                    "tags": ["Conductor"],
+                    "parameters": [
+                        {"name": "locale",    "in": "query", "required": False, "schema": {"type": "string", "default": "Penang"}, "description": "Locale to fetch from (default: Penang)"},
+                        {"name": "site",      "in": "query", "required": False, "schema": {"type": "string", "example": "odc"},          "description": "Site code, e.g. odc"},
+                        {"name": "data_hall", "in": "query", "required": False, "schema": {"type": "string", "example": "dh1"},          "description": "Data hall, e.g. dh1"},
+                        {"name": "rack",      "in": "query", "required": False, "schema": {"type": "string", "example": "a01"},          "description": "Rack ID, e.g. a01"},
+                        {"name": "level",     "in": "query", "required": False, "schema": {"type": "string", "example": "1"},            "description": "Level, e.g. 1"}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Filtered list of systems with parsed metadata",
+                            "content": {"application/json": {"example": {"locale": "Penang", "count": 2, "systems": [{"name": "gbt350-odcdh1-a01-1", "model": "gbt350", "site": "odc", "data_hall": "dh1", "rack": "a01", "level": "1"}]}}}
+                        },
+                        "504": {"description": "Conductor API timed out"},
+                        "502": {"description": "Conductor client error"}
+                    }
+                }
+            },
+            "/api/conductor/list-systems": {
+                "get": {
+                    "summary": "List Systems by Locale",
+                    "description": "Return all system names from Conductor filtered by locale name (e.g. 'Penang').",
+                    "tags": ["Conductor"],
+                    "parameters": [
+                        {"name": "locale", "in": "query", "required": True, "schema": {"type": "string", "example": "Penang"}, "description": "Locale name to filter by (e.g. 'Penang')"},
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "List of systems in the locale",
+                            "content": {"application/json": {"example": {"locale": "Penang", "count": 2, "systems": ["gbt350-odcdh1-a01-1", "gbt350-odcdh1-a01-2"]}}}
+                        },
+                        "400": {"description": "Missing locale parameter"},
+                        "504": {"description": "Conductor API timed out"},
+                        "502": {"description": "Conductor client error"}
+                    }
+                }
+            },
+            "/api/conductor/system/raw-data": {
+                "get": {
+                    "summary": "Get System Data",
+                    "description": "Retrieve complete system health data from Conductor",
+                    "tags": ["Conductor"],
+                    "parameters": [
+                        {"name": "system_name", "in": "query", "required": True, "schema": {"type": "string", "example": "gbt350-odcdh1-a01-1"}, "description": "Name of the system to query from Conductor"}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "System health data",
+                            "content": {"application/json": {"example": {"details": {"name": "gbt350-odcdh1-a01-1", "status": "healthy"}}}}
+                        },
+                        "400": {"description": "Missing system_name parameter"},
+                        "504": {"description": "Conductor API timed out"},
+                        "502": {"description": "Conductor client error"}
+                    }
+                }
+            },
             "/api/dashboard": {
                 "get": {
                     "summary": "Get Total Power by Site",
@@ -120,18 +205,18 @@ def openapi_spec():
                     "responses": {"200": {"description": "Latest temperature readings"}}
                 }
             },
-            "/api/systems": {
-                "get": {
-                    "summary": "Get Systems List",
-                    "description": "List all monitored systems with optional filtering",
-                    "tags": ["Systems"],
-                    "parameters": [
-                        {"name": "site", "in": "query", "schema": {"type": "string", "example": "odcdh1"}, "description": "Site filter (e.g., odcdh1, odcdh2)"},
-                        {"name": "location", "in": "query", "schema": {"type": "string", "example": "a01-1"}, "description": "Location filter (e.g., a01-1)"}
-                    ],
-                    "responses": {"200": {"description": "Systems array"}}
-                }
-            },
+            # "/api/systems": {
+            #     "get": {
+            #         "summary": "Get Systems List",
+            #         "description": "List all monitored systems with optional filtering",
+            #         "tags": ["Systems"],
+            #         "parameters": [
+            #             {"name": "site", "in": "query", "schema": {"type": "string", "example": "odcdh1"}, "description": "Site filter (e.g., odcdh1, odcdh2)"},
+            #             {"name": "location", "in": "query", "schema": {"type": "string", "example": "a01-1"}, "description": "Location filter (e.g., a01-1)"}
+            #         ],
+            #         "responses": {"200": {"description": "Systems array"}}
+            #     }
+            # },
             "/api/system-temperature": {
                 "get": {
                     "summary": "Get System Temperatures",
