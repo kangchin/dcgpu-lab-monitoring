@@ -8,8 +8,8 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
-        source: "/api/:path*",  // catches "power/monthly-summary"
-        destination: "http://localhost:5000/:path*", 
+        source: "/api/:path*",
+        destination: "http://localhost:5000/api/:path*",
       }
     ];
   }
