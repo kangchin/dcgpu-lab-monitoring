@@ -1,7 +1,7 @@
 "use client";
 import axios from "axios";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/utils";
 import { ExternalLink } from "lucide-react";
@@ -40,6 +40,7 @@ interface ClientPowerRackProps {
   rack: string;
   datahall: string;
   site: string;
+  level?: string;
 }
 type DateRange = "24h" | "7d" | "1mnth";
 type GroupedPower = {
@@ -51,6 +52,7 @@ export default function ClientPowerRack({
   rack,
   datahall,
   site,
+  level,
 }: ClientPowerRackProps) {
   const { theme } = useTheme();
 
@@ -61,6 +63,7 @@ export default function ClientPowerRack({
   const [allPowerLoading, setAllPowerLoading] = useState<boolean>(true);
   const [systems, setSystems] = useState<any[]>([]);
   const [systemsLoading, setSystemsLoading] = useState<boolean>(true);
+  const [systemIds, setSystemIds] = useState<{[key: string]: string}>({});
 
   //CHARTS STATES
   const [chartConfig, setChartConfig] = useState<ChartConfig>({});
@@ -97,6 +100,8 @@ export default function ClientPowerRack({
       setAllPowerLoading(false);
     } catch (e) {
       console.log(e);
+      setAllPowerLoading(false);
+      setAllPowerLoading(false);
     }
   };
 
@@ -135,22 +140,51 @@ export default function ClientPowerRack({
     }
   };
 
-  const getSystems = async () => {
+  const getSystems = useCallback(async () => {
+    setSystemsLoading(true);
     try {
-      const response = await axios.get(
-        `/api/systems?site=${site}&location=${rack}`
-      );
+      let url = `/api/conductor/systems?locale=Penang&site=${site}&data_hall=${datahall}&rack=${rack}`;
+      if (level) {
+        url += `&level=${level}`;
+      }
+      const response = await axios.get(url);
       if (response && response.status === 200) {
-        setSystems(response.data || []);
+        const systemsList = response.data?.systems || [];
+        setSystems(systemsList);
+
+        // Fetch system IDs from raw-data endpoint
+        const idsMap: { [key: string]: string } = {};
+        for (const system of systemsList) {
+          try {
+            const rawDataResponse = await axios.get(
+              `/api/conductor/system/raw-data?system_name=${encodeURIComponent(
+                system.name
+              )}`
+            );
+            if (
+              rawDataResponse.status === 200 &&
+              rawDataResponse.data?.details?.id
+            ) {
+              idsMap[system.name] = rawDataResponse.data.details.id;
+            }
+          } catch (error) {
+            console.error(
+              `Failed to fetch ID for system ${system.name}:`,
+              error
+            );
+          }
+        }
+        setSystemIds(idsMap);
       } else {
         setSystems([]);
       }
-      setSystemsLoading(false);
-    } catch (e) {
+    } catch (error) {
+      console.error("Failed to fetch systems:", error);
       setSystems([]);
+    } finally {
       setSystemsLoading(false);
     }
-  };
+  }, [site, datahall, rack, level]);
 
   //EFFECTS
   useEffect(() => {
@@ -177,7 +211,11 @@ export default function ClientPowerRack({
 
   useEffect(() => {
     getSystems();
-  }, [site, rack]);
+  }, [getSystems]);
+
+  useEffect(() => {
+    console.log("Component props:", { site, datahall, rack });
+  }, [site, datahall, rack]);
 
   return (
     <>
@@ -197,12 +235,16 @@ export default function ClientPowerRack({
                   {systems.map((system, idx) => (
                     <li key={idx} className="text-sm font-light">
                       <a
-                        href={`https://conductor.amd.com/system/management?page=0&pageSize=25&filter=${encodeURIComponent(system.system)}`}
+                        href={
+                          systemIds[system.name]
+                            ? `https://conductor.amd.com/system/details?system_id=${systemIds[system.name]}`
+                            : `https://conductor.amd.com/system/management?page=0&pageSize=25&filter=${encodeURIComponent(system.name)}`
+                        }
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-blue-600 underline hover:text-blue-800"
                       >
-                        {system.system}
+                        {system.name}
                       </a>
                     </li>
                   ))}
