@@ -6,3 +6,4 @@ python-dateutil
 redis
 requests
 flasgger
+pydantic

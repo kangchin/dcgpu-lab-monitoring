@@ -7,5 +7,5 @@ export default async function PowerRack({
 }) {
   const { rack } = await params;
 
-  return <ClientPowerRack datahall="dh4" site="odcdh4" rack={rack} />;
+  return <ClientPowerRack datahall="dh4" site="odc" rack={rack} />;
 }
