@@ -17,6 +17,7 @@ import {
   SidebarMenuSubItem,
   SidebarMenuSubButton,
 } from "@/components/ui/sidebar";
+import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { usePathname } from "next/navigation";
@@ -38,7 +39,7 @@ const items = [
   },
   {
     title: "Nmap Scan",
-    url: "/nmap",
+    url: "/nmap-scan",
     icon: Radar,
     activeIndicator: "",
   },
@@ -50,9 +51,13 @@ const items = [
   },
   {
     title: "OpenDC",
-    url: "/opendc/overview",
     icon: Factory,
     subitems: [
+      {
+        title: "Overview",
+        url: "/opendc/overview",
+        activeIndicator: "",
+      },
       {
         title: "Data Hall 1",
         url: "/opendc/dh1",
@@ -68,6 +73,11 @@ const items = [
         url: "/opendc/dh3",
         activeIndicator: "",
         subitems: [
+          {
+            title: "Overview",
+            url: "/opendc/dh3",
+            activeIndicator: "",
+          },
           {
             title: "Temperature Monitoring",
             url: "/opendc/dh3/temperature",
@@ -113,14 +123,12 @@ export function AppSidebar() {
               {items.map((item) =>
                 item.subitems ? (
                   <Fragment key={item.title}>
-                    <SidebarMenuItem>
-                      <SidebarMenuButton asChild isActive={item.url == pathname}>
-                        <a href={item.url}>
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </a>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
+                    <Slot className="flex items-center h-8 text-sm peer/menu-button w-full gap-2 overflow-hidden rounded-md p-2 text-left outline-none ring-sidebar-ring transition-[width,height,padding] group-has-[[data-sidebar=menu-action]]/menu-item:pr-8 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:!size-8 group-data-[collapsible=icon]:!p-2 [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0">
+                      <div>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </div>
+                    </Slot>
                     <SidebarMenuSub>
                       {item.subitems.map((subitem) =>
                         subitem.subitems ? (
@@ -142,9 +150,10 @@ export function AppSidebar() {
                                     <SidebarMenuSubButton
                                       asChild
                                       isActive={nestedItem.url == pathname}
+                                      className="pl-8"
                                     >
                                       <a href={nestedItem.url}>
-                                        <span>
+                                        <span className="text-xs">
                                           {nestedItem.title}
                                         </span>
                                       </a>

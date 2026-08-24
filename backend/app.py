@@ -12,8 +12,7 @@ from routes.dashboard import dashboard
 from routes.monthly_data import monthly_data
 from routes.system_temperature import system_temperature
 from routes.power_capacity import power_capacity
-from routes.nmap import nmap
-
+from routes.nmap_scan import nmap_scan
 
 app = Flask(__name__)
 CORS(
@@ -41,14 +40,14 @@ app.config.update(
     SSH_DEFAULT_PASSWORD=os.environ.get("SSH_DEFAULT_PASSWORD", ""),
 )
 
-app.register_blueprint(conductor_system, url_prefix="/api/conductor/system")
+app.register_blueprint(conductor_system, url_prefix="/api/conductor")
 app.register_blueprint(system_temperature, url_prefix="/api/system-temperature")
 app.register_blueprint(power, url_prefix="/api/power")
 app.register_blueprint(temperature, url_prefix="/api/temperature")
 app.register_blueprint(dashboard, url_prefix="/api/dashboard")
 app.register_blueprint(monthly_data, url_prefix="/api/monthly-power-data")
 app.register_blueprint(power_capacity, url_prefix="/api/power-capacity")
-app.register_blueprint(nmap, url_prefix="/api/nmap")
+app.register_blueprint(nmap_scan, url_prefix="/api/nmap-scan")
 
 # OpenAPI Specification
 @app.route('/openapi.json')
@@ -63,7 +62,7 @@ def openapi_spec():
         },
         "servers": [{"url": "http://localhost:5000", "description": "Local Development"}],
         "paths": {
-            "/api/conductor/system": {
+            "/api/conductor/systems": {
                 "get": {
                     "summary": "List Systems by Site / Data Hall / Rack / Level",
                     "description": "Fetch all systems in a locale and filter by site, data hall, rack and/or level parsed from the system name convention `{model}-{site}{dh}-{rack}-{level}`.",
@@ -85,7 +84,7 @@ def openapi_spec():
                     }
                 }
             },
-            "/api/conductor/system/list": {
+            "/api/conductor/list-systems": {
                 "get": {
                     "summary": "List Systems by Locale",
                     "description": "Return all system names from Conductor filtered by locale name (e.g. 'Penang').",
@@ -350,11 +349,11 @@ def openapi_spec():
                     "responses": {"200": {"description": "Missing months calculation"}}
                 }
             },
-            "/api/nmap/validate-password": {
+            "/api/nmap-scan/validate-password": {
                 "post": {
                     "summary": "Validate Admin Password",
                     "description": "Validate admin password for lock/unlock mechanism",
-                    "tags": ["Network Discovery"],
+                    "tags": ["Network Scanning"],
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -366,154 +365,57 @@ def openapi_spec():
                     "responses": {"200": {"description": "Validation status"}, "401": {"description": "Invalid password"}}
                 }
             },
-            "/api/nmap/update-system": {
+            "/api/nmap-scan/update-system": {
                 "post": {
                     "summary": "Update System Information",
                     "description": "Update system details (requires admin password)",
-                    "tags": ["Network Discovery"],
+                    "tags": ["Network Scanning"],
                     "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
                     "responses": {"200": {"description": "Update status"}, "401": {"description": "Invalid password"}}
                 }
             },
-            "/api/nmap/update-hostname": {
+            "/api/nmap-scan/update-hostname": {
                 "post": {
                     "summary": "Update Hostname",
                     "description": "Update system hostname (requires admin password)",
-                    "tags": ["Network Discovery"],
+                    "tags": ["Network Scanning"],
                     "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
                     "responses": {"200": {"description": "Update status"}}
                 }
             },
-            "/api/nmap/create-system": {
+            "/api/nmap-scan/create-system": {
                 "post": {
                     "summary": "Create New System",
                     "description": "Create new monitored system (requires admin password)",
-                    "tags": ["Network Discovery"],
+                    "tags": ["Network Scanning"],
                     "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
                     "responses": {"200": {"description": "Creation status"}}
                 }
             },
-            "/api/nmap/create-pdu": {
+            "/api/nmap-scan/create-pdu": {
                 "post": {
                     "summary": "Create New PDU",
                     "description": "Create new Power Distribution Unit with SNMP detection (requires admin password)",
-                    "tags": ["Network Discovery"],
+                    "tags": ["Network Scanning"],
                     "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
                     "responses": {"200": {"description": "PDU creation status"}}
                 }
             },
-            "/api/nmap/ignore-device": {
+            "/api/nmap-scan/ignore-device": {
                 "post": {
                     "summary": "Ignore Device",
                     "description": "Add device to ignored list (requires admin password)",
-                    "tags": ["Network Discovery"],
+                    "tags": ["Network Scanning"],
                     "requestBody": {"required": True, "content": {"application/json": {"schema": {"type": "object"}}}},
                     "responses": {"200": {"description": "Ignore status"}}
                 }
             },
-            "/api/nmap/ignored-devices": {
+            "/api/nmap-scan/ignored-devices": {
                 "get": {
                     "summary": "Get Ignored Devices",
                     "description": "List all devices in ignored list",
-                    "tags": ["Network Discovery"],
+                    "tags": ["Network Scanning"],
                     "responses": {"200": {"description": "Ignored devices array"}}
-                }
-            },
-            "/api/nmap/scan": {
-                "post": {
-                    "summary": "Full Network Scan (Devices)",
-                    "description": "Scan network subnets across 10.145.68.0/24 through 10.145.135.0/24 to discover all devices. Returns categorized list of discovered systems (BMC), PDUs, non-standard devices, and devices without hostnames with summary counts.",
-                    "tags": ["Network Discovery"],
-                    "responses": {
-                        "200": {
-                            "description": "Full network scan results with device category counts and analysis of changes",
-                            "content": {
-                                "application/json": {
-                                    "example": {
-                                        "status": "success",
-                                        "summary": {
-                                            "total_devices": 250,
-                                            "bmc_systems": 120,
-                                            "pdu_devices": 130,
-                                            "non_standard_devices": 0,
-                                            "devices_without_hostname": 0
-                                        },
-                                        "scanned_devices": {
-                                            "systems": [
-                                                {"hostname": "bmc-smci001.amd.com", "ip": "10.145.68.100"}
-                                            ],
-                                            "pdus": [
-                                                {"hostname": "pdu-odcdh3-b04-2.amd.com", "ip": "10.145.68.79"}
-                                            ],
-                                            "non_standard": [],
-                                            "no_hostname": []
-                                        },
-                                        "analysis": {
-                                            "new_systems": [],
-                                            "new_pdus": [],
-                                            "changed_system_ips": [],
-                                            "changed_system_hostnames": [],
-                                            "changed_pdu_hostnames": [],
-                                            "not_detected_systems": [],
-                                            "not_detected_pdus": []
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        "500": {"description": "Scan error"}
-                    }
-                }
-            },
-            "/api/nmap/scan/status": {
-                "get": {
-                    "summary": "Scanner Availability Status",
-                    "description": "Check if nmap or scanner service is available and return version/platform information",
-                    "tags": ["Network Discovery"],
-                    "responses": {
-                        "200": {
-                            "description": "Scanner status and availability",
-                            "content": {
-                                "application/json": {
-                                    "example": {
-                                        "status": "available",
-                                        "method": "local_nmap",
-                                        "version": "Nmap version 7.80",
-                                        "platform": "Windows"
-                                    }
-                                }
-                            }
-                        },
-                        "503": {"description": "Scanner not available"}
-                    }
-                }
-            },
-            "/api/nmap/pdu/scan": {
-                "post": {
-                    "summary": "Scan for PDU Devices Only",
-                    "description": "Scan network subnets for PDU devices and extract SNMP information (model, serial, MAC) via manufacturer-specific OIDs. Supports Tripp Lite, Enlogic, and Raritan PDUs.",
-                    "tags": ["Network Discovery"],
-                    "responses": {
-                        "200": {
-                            "description": "PDU scan results with extracted SNMP data",
-                            "content": {
-                                "application/json": {
-                                    "example": {
-                                        "status": "success",
-                                        "pdu_count": 130,
-                                        "timestamp": "2026-08-22T10:30:00.000000",
-                                        "pdus": [
-                                            {
-                                                "hostname": "pdu-odcdh3-b04-2.amd.com",
-                                                "ip": "10.145.68.79"
-                                            }
-                                        ]
-                                    }
-                                }
-                            }
-                        },
-                        "500": {"description": "Scan error"}
-                    }
                 }
             }
         }
