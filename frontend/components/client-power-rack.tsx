@@ -143,7 +143,7 @@ export default function ClientPowerRack({
   const getSystems = useCallback(async () => {
     setSystemsLoading(true);
     try {
-      let url = `/api/conductor/system?locale=Penang&site=${site}&data_hall=${datahall}&rack=${rack}`;
+      let url = `/api/conductor/systems?locale=Penang&site=${site}&data_hall=${datahall}&rack=${rack}`;
       if (level) {
         url += `&level=${level}`;
       }
