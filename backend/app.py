@@ -16,7 +16,6 @@ from routes.nmap import nmap
 
 
 app = Flask(__name__)
-app.url_map.strict_slashes = False
 CORS(
     app,
     origins="*",
