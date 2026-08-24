@@ -74,7 +74,7 @@ export default function ClientPowerRack({
   const getCurrPower = async () => {
     try {
       const response = await axios.get(
-        `/api/power/latest?site=${site}&location=${rack}`
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/power/latest?site=${site}&location=${rack}`
       );
       if (response && response.status === 200) {
         setCurrPower(response.data || []);
@@ -90,7 +90,7 @@ export default function ClientPowerRack({
   const getAllPower = async (dateRange: DateRange) => {
     try {
       const response = await axios.get(
-        `/api/power?site=${site}&location=${rack}&timeline=${dateRange}`
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/power?site=${site}&location=${rack}&timeline=${dateRange}`
       );
       if (response && response.status === 200) {
         setAllPower(response.data || []);
@@ -143,7 +143,7 @@ export default function ClientPowerRack({
   const getSystems = useCallback(async () => {
     setSystemsLoading(true);
     try {
-      let url = `/api/conductor/systems?locale=Penang&site=${site}&data_hall=${datahall}&rack=${rack}`;
+      let url = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/conductor/system/?locale=Penang&site=${site}&data_hall=${datahall}&rack=${rack}`;
       if (level) {
         url += `&level=${level}`;
       }
@@ -157,7 +157,7 @@ export default function ClientPowerRack({
         for (const system of systemsList) {
           try {
             const rawDataResponse = await axios.get(
-              `/api/conductor/system/raw-data?system_name=${encodeURIComponent(
+              `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/conductor/system/raw-data/?system_name=${encodeURIComponent(
                 system.name
               )}`
             );
