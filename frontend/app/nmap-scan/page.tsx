@@ -192,7 +192,7 @@ export default function NmapScanPage() {
     setLockError("");
     try {
       await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/validate-password`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/validate-password`,
         { admin_password: lockPasswordInput }
       );
       setAdminPassword(lockPasswordInput);
@@ -216,7 +216,7 @@ export default function NmapScanPage() {
   const checkScannerStatus = async () => {
     try {
       const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/scan/status`
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/scan/status`
       );
       setScannerStatus(response.data);
     } catch (e) {
@@ -229,7 +229,7 @@ export default function NmapScanPage() {
     setError(undefined);
     try {
       const response = await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/scan`
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/scan`
       );
       if (response.data.status === "success") {
         setScanData(response.data);
@@ -246,7 +246,7 @@ export default function NmapScanPage() {
   const fetchChangeLogs = async () => {
     try {
       const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/change-logs`
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/change-logs`
       );
       if (response.data.status === "success") setChangeLogs(response.data.change_logs);
     } catch (e) {
@@ -257,7 +257,7 @@ export default function NmapScanPage() {
   const fetchIgnoredDevices = async () => {
     try {
       const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/ignored-devices`
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/ignored-devices`
       );
       if (response.data.status === "success") setIgnoredDevices(response.data.ignored_devices);
     } catch (e) {
@@ -268,7 +268,7 @@ export default function NmapScanPage() {
   const fetchDisabledDevices = async () => {
     try {
       const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/disabled-devices`
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/disabled-devices`
       );
       if (response.data.status === "success") setDisabledDevices(response.data.disabled_devices);
     } catch (e) {
@@ -290,7 +290,7 @@ export default function NmapScanPage() {
     if (!updateDialog) return;
     try {
       const response = await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/update-system`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/update-system`,
         {
           system_id: updateDialog._id,
           system_name: updateDialog.hostname,
@@ -324,7 +324,7 @@ export default function NmapScanPage() {
     if (!confirm(`Move this ${entityType} to disabled?`)) return;
     try {
       await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/move-to-disabled`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/move-to-disabled`,
         { entity_id: entityId, entity_type: entityType, admin_password: adminPassword, admin_user: "admin" }
       );
       alert("Moved to disabled successfully");
@@ -350,7 +350,7 @@ export default function NmapScanPage() {
     if (!confirm("Restore this device back to active?")) return;
     try {
       await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/restore-from-disabled`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/restore-from-disabled`,
         { disabled_id: disabledId, admin_password: adminPassword, admin_user: "admin" }
       );
       alert("Restored successfully");
@@ -366,7 +366,7 @@ export default function NmapScanPage() {
     if (!hostnameUpdateDialog) return;
     try {
       const response = await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/update-hostname`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/update-hostname`,
         {
           entity_id: hostnameUpdateDialog._id,
           entity_type: hostnameUpdateDialog.entity_type,
@@ -405,7 +405,7 @@ export default function NmapScanPage() {
     if (!createDialog) return;
     try {
       const response = await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/create-system`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/create-system`,
         {
           hostname: createDialog.hostname,
           ip: createDialog.ip,
@@ -440,7 +440,7 @@ export default function NmapScanPage() {
     if (!createDialog) return;
     try {
       const response = await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/create-pdu`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/create-pdu`,
         {
           hostname: createDialog.hostname,
           ip: createDialog.ip,
@@ -475,7 +475,7 @@ export default function NmapScanPage() {
     if (!ignoreDialog) return;
     try {
       const response = await axios.post(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/ignore-device`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/ignore-device`,
         {
           hostname: ignoreDialog.hostname,
           device_type: ignoreDialog.device_type,
@@ -528,7 +528,7 @@ export default function NmapScanPage() {
     if (!confirm("Remove this device from the ignored list?")) return;
     try {
       const response = await axios.delete(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap-scan/unignore-device/${deviceId}`,
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/nmap/unignore-device/${deviceId}`,
         { data: { admin_password: adminPassword } }
       );
       if (response.data.status === "success") {
