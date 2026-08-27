@@ -13,6 +13,7 @@ from routes.monthly_data import monthly_data
 from routes.system_temperature import system_temperature
 from routes.power_capacity import power_capacity
 from routes.nmap import nmap
+from routes.pdu import pdu
 
 
 app = Flask(__name__)
@@ -50,7 +51,7 @@ app.register_blueprint(dashboard, url_prefix="/api/dashboard")
 app.register_blueprint(monthly_data, url_prefix="/api/monthly-power-data")
 app.register_blueprint(power_capacity, url_prefix="/api/power-capacity")
 app.register_blueprint(nmap, url_prefix="/api/nmap")
-
+app.register_blueprint(pdu, url_prefix="/api/pdu")
 # OpenAPI Specification
 @app.route('/openapi.json')
 def openapi_spec():
@@ -444,7 +445,7 @@ def openapi_spec():
                                                 {"hostname": "bmc-smci001.amd.com", "ip": "10.145.68.100"}
                                             ],
                                             "pdus": [
-                                                {"hostname": "pdu-odcdh3-b04-2.amd.com", "ip": "10.145.68.79"}
+                                                {"hostname": "pdu-odcdh3-b12-1.amd.com", "ip": "10.145.68.79"}
                                             ],
                                             "non_standard": [],
                                             "no_hostname": []
@@ -489,10 +490,10 @@ def openapi_spec():
                     }
                 }
             },
-            "/api/nmap/pdu/scan": {
+            "/api/nmap/pdu": {
                 "post": {
                     "summary": "Scan for PDU Devices Only",
-                    "description": "Scan network subnets for PDU devices and extract SNMP information (model, serial, MAC) via manufacturer-specific OIDs. Supports Tripp Lite, Enlogic, and Raritan PDUs.",
+                    "description": "Scan network subnets for PDU devices.",
                     "tags": ["Network Discovery"],
                     "responses": {
                         "200": {
@@ -505,7 +506,7 @@ def openapi_spec():
                                         "timestamp": "2026-08-22T10:30:00.000000",
                                         "pdus": [
                                             {
-                                                "hostname": "pdu-odcdh3-b04-2.amd.com",
+                                                "hostname": "pdu-odcdh3-b12-1.amd.com",
                                                 "ip": "10.145.68.79"
                                             }
                                         ]
@@ -514,6 +515,93 @@ def openapi_spec():
                             }
                         },
                         "500": {"description": "Scan error"}
+                    }
+                }
+            },
+            "/api/pdu": {
+                "get": {
+                    "summary": "Retrieve PDU Information by Hostname",
+                    "description": "Retrieve PDU device information from database by hostname. Returns all stored fields including hardware specs, infrastructure metadata, and timestamps.",
+                    "tags": ["PDU"],
+                    "parameters": [
+                        {
+                            "name": "hostname",
+                            "in": "query",
+                            "required": True,
+                            "schema": {
+                                "type": "string"
+                            },
+                            "description": "PDU hostname or FQDN",
+                            "example": "pdu-odcdh3-b04-2.amd.com"
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "PDU information successfully retrieved from database",
+                            "content": {
+                                "application/json": {
+                                    "example": {
+                                        "status": "success",
+                                        "hostname": "pdu-odcdh3-b04-2.amd.com",
+                                        "pdu_info": {
+                                            "hostname": "pdu-odcdh3-b04-2.amd.com",
+                                            "ip_address": "10.145.68.79",
+                                            "manufacturer": "Tripp Lite",
+                                            "model": "PDUH40LS",
+                                            "serial_number": "TL-123456-DEV",
+                                            "mac_address": "00:50:C2:AA:BB:CC",
+                                            "power_oid": "1.3.6.1.4.1.850.1.1.1.1.1.1.0",
+                                            "locale": "Asia/Kuala_Lumpur",
+                                            "site": "ODC",
+                                            "data_hall": "DH3",
+                                            "rack": "B04",
+                                            "level": "2",
+                                            "created": "2026-08-24T07:36:00.515000",
+                                            "updated": "2026-08-24T09:28:46.281000"
+                                        },
+                                        "database_info": {
+                                            "created": "2026-08-24T07:36:00.515000",
+                                            "updated": "2026-08-24T09:28:46.281000",
+                                            "source": "lab-monitoring.pdu_test",
+                                            "collection": "lab-monitoring.pdu_test"
+                                        },
+                                        "timestamp": "2026-08-24T09:28:46.383410"
+                                    }
+                                }
+                            }
+                        },
+                        "400": {"description": "Missing hostname query parameter"},
+                        "404": {"description": "PDU hostname not found in database"},
+                        "500": {"description": "PDU retrieval error"}
+                    }
+                }
+            },
+            "/api/pdu/sync-all": {
+                "post": {
+                    "summary": "Manually Trigger Full PDU Synchronization",
+                    "description": "Manually trigger the complete PDU synchronization workflow with a fresh network rescan. This endpoint: (1) Scans network for PDU devices, (2) Creates/updates PDU records with hostname and IP, (3) Extracts manufacturer info via SNMP, (4) Parses hostname to extract infrastructure metadata (site, data_hall, rack, level, locale), (5) Updates all PDU records in the database with complete information. Always performs a complete rescan.",
+                    "tags": ["PDU"],
+                    "responses": {
+                        "200": {
+                            "description": "PDU synchronization completed successfully",
+                            "content": {
+                                "application/json": {
+                                    "example": {
+                                        "status": "success",
+                                        "message": "PDU synchronization completed successfully",
+                                        "sync_result": {
+                                            "status": "success",
+                                            "message": "PDU sync completed: 135/135 records updated",
+                                            "pdu_count": 135,
+                                            "successful_updates": 135,
+                                            "failed_updates": 0
+                                        },
+                                        "timestamp": "2026-08-24T10:06:35.537910"
+                                    }
+                                }
+                            }
+                        },
+                        "500": {"description": "PDU synchronization error"}
                     }
                 }
             }

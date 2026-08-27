@@ -1,4 +1,5 @@
 # backend/routes/nmap.py
+# Network scanning operations: nmap execution, device parsing, filtering
 import re
 import subprocess
 import platform
@@ -8,7 +9,6 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import Blueprint, jsonify, request
-# from utils.models.systems import Systems
 from utils.models.pdu import PDU
 from utils.models.change_log import ChangeLog
 from utils.models.ignored_device import IgnoredDevice
@@ -20,35 +20,6 @@ from typing import Dict, List, Optional
 nmap = Blueprint("nmap", __name__)
 
 logger = logging.getLogger(__name__)
-
-# Manufacturer-specific SNMP OIDs for PDU detection
-PDU_MANUFACTURERS = {
-    "tripp_lite": {
-        "model": "1.3.6.1.4.1.850.1.1.1.2.1.5.1",
-        "serial": "1.3.6.1.4.1.850.1.1.2.1.1.5.1",
-        "mac_address": "1.3.6.1.4.1.850.1.2.1.1.4.0",
-        "display_name": "Tripp Lite"
-    },
-    "enlogic": {
-        "model": "1.3.6.1.4.1.38446.1.1.2.1.11.1",
-        "serial": "1.3.6.1.4.1.38446.1.1.2.1.12.1",
-        "mac_address": "1.3.6.1.4.1.38446.1.1.2.1.8.1.1",
-        "display_name": "Enlogic"
-    },
-    "raritan": {
-        "model": "1.3.6.1.4.1.13742.6.3.2.1.1.3.1",
-        "serial": "1.3.6.1.4.1.13742.6.3.2.1.1.4.1",
-        "mac_address": "1.3.6.1.4.1.13742.6.3.2.2.1.11.1",
-        "display_name": "Raritan"
-    }
-}
-
-# Try to import pysnmp
-try:
-    from pysnmp.hlapi import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData
-    PYSNMP_AVAILABLE = True
-except ImportError:
-    PYSNMP_AVAILABLE = False
 
 
 def serialize(doc):
@@ -70,191 +41,15 @@ ADMIN_PASSWORD = os.environ.get("NMAP_ADMIN_PASSWORD", "admin123")
 
 
 # ===================================================================
-# PDU SNMP Functions
+# Network Scanning Functions
 # ===================================================================
 
-def snmp_query(hostname: str, oid: str, v2c: str = "amd123", timeout: int = 5) -> Optional[str]:
-    """
-    Query a single SNMP OID using pysnmp or subprocess fallback.
-    
-    Args:
-        hostname: Target hostname or IP address
-        oid: SNMP Object Identifier to query
-        v2c: SNMP v2c community string (default: "amd123")
-        timeout: Query timeout in seconds (default: 5)
-    
-    Returns:
-        String value from SNMP response, or None if query fails
-    """
-    try:
-        if PYSNMP_AVAILABLE:
-            # Use pysnmp library
-            snmp_engine = SnmpEngine()
-            iterator = getCmd(
-                snmp_engine,
-                CommunityData(v2c, mpModel=1),  # SNMPv2c
-                UdpTransportTarget((hostname, 161), timeout=timeout),
-                ContextData(),
-                oid
-            )
-            
-            error_indication, error_status, error_index, var_binds = next(iterator)
-            
-            if error_indication or error_status:
-                logger.debug(f"SNMP query failed for {hostname} OID {oid}")
-                return None
-            
-            # Extract the value
-            for var_bind in var_binds:
-                return str(var_bind[1])
-            
-            return None
-        else:
-            # Fallback to subprocess snmpget
-            result = subprocess.run(
-                ["snmpget", "-v2c", "-c", v2c, "-Oqv", hostname, oid],
-                capture_output=True,
-                text=True,
-                timeout=timeout
-            )
-            
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip().strip('"')
-            
-            return None
-    
-    except Exception as e:
-        logger.error(f"SNMP query error for {hostname} OID {oid}: {e}")
-        return None
-
-
-def extract_pdu_info(hostname: str, ip_address: str = "", v2c: str = "amd123") -> Dict:
-    """
-    Extract PDU information via SNMP queries.
-    
-    Attempts to query each manufacturer's OIDs in sequence until one responds.
-    
-    Args:
-        hostname: PDU hostname/FQDN to query
-        ip_address: IP address (optional, for reference)
-        v2c: SNMP v2c community string (default: "amd123")
-    
-    Returns:
-        Dictionary containing PDU information
-    """
-    pdu_info = {
-        "hostname": hostname,
-        "ip_address": ip_address,
-        "manufacturer": "",
-        "model": "",
-        "serial_number": "",
-        "mac_address": ""
-    }
-    
-    # Check availability of SNMP tools
-    if not PYSNMP_AVAILABLE:
-        try:
-            subprocess.run(
-                ["snmpget", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-        except FileNotFoundError:
-            pdu_info["error"] = "SNMP tools not found. Install: pip install pysnmp"
-            return pdu_info
-    
-    # Try each manufacturer's OIDs
-    for manufacturer_key, oids in PDU_MANUFACTURERS.items():
-        model = snmp_query(hostname, oids["model"], v2c)
-        
-        if model:
-            pdu_info["manufacturer"] = oids["display_name"]
-            pdu_info["model"] = model
-            
-            # Query serial number
-            serial = snmp_query(hostname, oids["serial"], v2c)
-            if serial:
-                pdu_info["serial_number"] = serial
-            
-            # Query MAC address
-            mac = snmp_query(hostname, oids["mac_address"], v2c)
-            if mac:
-                pdu_info["mac_address"] = mac
-            
-            logger.info(f"Successfully extracted info for {hostname}: {oids['display_name']}")
-            return pdu_info
-    
-    # No valid manufacturer OIDs found
-    pdu_info["error"] = "Unable to determine PDU manufacturer - no valid SNMP responses"
-    logger.warning(f"Could not determine manufacturer for {hostname}")
-    return pdu_info
-
-
-def extract_pdu_batch(hostnames: List[str], v2c: str = "amd123") -> List[Dict]:
-    """Extract PDU information for multiple hostnames."""
-    results = []
-    for hostname in hostnames:
-        pdu_info = extract_pdu_info(hostname, "", v2c)
-        results.append(pdu_info)
-    return results
-
-
-def list_pdus_summary(pdu_list: List[Dict]) -> Dict:
-    """Generate a summary of discovered PDUs organized by manufacturer."""
-    summary = {
-        "total_pdus": len(pdu_list),
-        "by_manufacturer": {},
-        "with_errors": [],
-        "successful": []
-    }
-    
-    for pdu in pdu_list:
-        if "error" in pdu:
-            summary["with_errors"].append(pdu)
-        else:
-            summary["successful"].append(pdu)
-            manufacturer = pdu.get("manufacturer", "unknown")
-            if manufacturer not in summary["by_manufacturer"]:
-                summary["by_manufacturer"][manufacturer] = []
-            summary["by_manufacturer"][manufacturer].append({
-                "hostname": pdu["hostname"],
-                "model": pdu["model"],
-                "serial": pdu["serial_number"],
-                "mac": pdu["mac_address"]
-            })
-    
-    return summary
-
-
-def verify_snmp_availability() -> Dict:
-    """Check SNMP tools availability on the system."""
-    status = {
-        "pysnmp_available": PYSNMP_AVAILABLE,
-        "snmpget_available": False,
-        "recommendation": ""
-    }
-    
-    if PYSNMP_AVAILABLE:
-        status["recommendation"] = "Using pysnmp library for SNMP queries"
-    else:
-        try:
-            subprocess.run(
-                ["snmpget", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=2
-            )
-            status["snmpget_available"] = True
-            status["recommendation"] = "Using snmpget command-line tool for SNMP queries"
-        except FileNotFoundError:
-            status["recommendation"] = "Install pysnmp: pip install pysnmp OR snmp tools: apt-get install snmp (Linux) / choco install net-snmp (Windows)"
-    
-    return status
-
-
 def scan_network_pdus(parse_nmap_output_fn, filter_ignored_devices_fn, is_windows_with_scanner_fn, get_scanner_service_url_fn):
-    """Scan networks and return only PDU devices."""
+    """
+    Scan networks and return only PDU devices from network scan.
+    
+    This function performs network scanning only. SNMP extraction is handled separately by pdu.py.
+    """
     networks = [
         "10.145.68.0/24",
         "10.145.69.0/24",
@@ -294,22 +89,8 @@ def scan_network_pdus(parse_nmap_output_fn, filter_ignored_devices_fn, is_window
         # Filter out ignored devices
         scanned_devices = filter_ignored_devices_fn(scanned_devices)
         
-        # Extract PDU data - combine PDUs (with "pdu" in hostname) with non-standard devices
-        pdu_devices = scanned_devices.get("pdus", [])  # Devices with "pdu" in hostname
-        non_standard = scanned_devices.get("non_standard", [])  # Other devices
-        
-        # Run SNMP extraction on non-standard devices to identify hidden PDUs
-        if non_standard:
-            non_standard_hostnames = [dev.get("hostname") for dev in non_standard if dev.get("hostname")]
-            pdu_extracts = extract_pdu_batch(non_standard_hostnames)
-            
-            # Add devices that were successfully identified as PDUs via SNMP
-            for extract in pdu_extracts:
-                if extract.get("manufacturer") and not extract.get("error"):
-                    # Find the corresponding device from non_standard
-                    orig_device = next((d for d in non_standard if d.get("hostname") == extract.get("hostname")), None)
-                    if orig_device:
-                        pdu_devices.append(orig_device)
+        # Extract PDU data - only devices with "pdu" in hostname
+        pdu_devices = scanned_devices.get("pdus", [])
         
         return {
             "status": "success",
@@ -320,47 +101,6 @@ def scan_network_pdus(parse_nmap_output_fn, filter_ignored_devices_fn, is_window
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
-
-
-def detect_pdu_type(hostname, ip, v2c="amd123"):
-    """Detect PDU type via SNMP sysDescr query and return type + default OID."""
-    try:
-        # Query SNMPv2-MIB::sysDescr.0 (1.3.6.1.2.1.1.1.0)
-        result = subprocess.run(
-            ["snmpwalk", "-v2c", "-c", v2c, "-Oqv", ip, "1.3.6.1.2.1.1.1.0"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        
-        if result.returncode != 0:
-            print(f"SNMP query failed for {hostname} ({ip}): {result.stderr}")
-            return {"type": "unknown", "default_oid": ""}
-        
-        sys_descr = result.stdout.strip().lower()
-        print(f"PDU {hostname} sysDescr: {sys_descr}")
-        
-        # Match manufacturer in sysDescr
-        if "tripp" in sys_descr or "tripplite" in sys_descr:
-            return {
-                "type": "tripplite",
-                "default_oid": "1.3.6.1.4.1.850.1.2.1.1.4.0"
-            }
-        elif "enlogic" in sys_descr:
-            return {
-                "type": "enlogic",
-                "default_oid": "1.3.6.1.4.1.38446.1.1.2.1.8.1.1"
-            }
-        else:
-            return {
-                "type": "unknown",
-                "default_oid": "",
-                "sys_descr": sys_descr[:100]  # Include first 100 chars for debugging
-            }
-    
-    except Exception as e:
-        print(f"Error detecting PDU type for {hostname}: {e}")
-        return {"type": "unknown", "default_oid": ""}
 
 
 def require_admin_password(f):
@@ -1043,9 +783,9 @@ def restore_from_disabled():
 # PDU Network Scanning Routes
 # ===================================================================
 
-@nmap.route("/pdu/scan", methods=["POST"])
+@nmap.route("/pdu", methods=["POST"])
 def scan_pdus():
-    """Scan networks and return only PDU devices using SNMP extraction."""
+    """Scan networks and return only PDU devices from network scan."""
     try:
         result = scan_network_pdus(
             parse_nmap_output,
@@ -1064,23 +804,6 @@ def scan_pdus():
             "status": "error",
             "message": str(e)
         }), 500
-
-        change_log = ChangeLog()
-        change_log.create({
-            "entity_type": entity_type,
-            "entity_id": disabled_id,
-            "entity_name": entity_name,
-            "change_type": "restored",
-            "old_values": {"status": "disabled"},
-            "new_values": {"status": "active"},
-            "changed_by": admin_user,
-            "created": datetime.now(),
-        })
-
-        return jsonify({"status": "success", "message": f"Restored {entity_name}"})
-
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # -------------------------------------------------------------------
