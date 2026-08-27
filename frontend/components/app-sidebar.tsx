@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, Factory, Moon, Thermometer, Radar, Zap } from "lucide-react";
+import { Home, Factory, Moon, Thermometer, Radar } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Fragment } from "react";
 import {
@@ -46,12 +46,6 @@ const items = [
     title: "Macros",
     url: "/macros",
     icon: Play,
-    activeIndicator: "",
-  },
-  {
-    title: "Test API",
-    url: "/test-api",
-    icon: Zap,
     activeIndicator: "",
   },
   {
