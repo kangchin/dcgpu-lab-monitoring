@@ -18,11 +18,14 @@ interface SyncResult {
 
 export default function TestApiPage() {
   const [loading, setLoading] = useState(false);
+  const [activeRequest, setActiveRequest] = useState<"sync-all" | "pdu" | null>(null);
   const [result, setResult] = useState<SyncResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const testSyncAllApi = async () => {
+    if (loading) return;
     setLoading(true);
+    setActiveRequest("sync-all");
     setError(null);
     setResult(null);
 
@@ -49,7 +52,9 @@ export default function TestApiPage() {
   };
 
   const testPduApi = async (hostname: string) => {
+    if (loading) return;
     setLoading(true);
+    setActiveRequest("pdu");
     setError(null);
     setResult(null);
 
@@ -74,6 +79,7 @@ export default function TestApiPage() {
       setError(err instanceof Error ? err.message : "Unknown error occurred");
     } finally {
       setLoading(false);
+      setActiveRequest(null);
     }
   };
 
@@ -81,6 +87,12 @@ export default function TestApiPage() {
     <div className="min-h-screen bg-background dark:bg-background-dark text-text dark:text-text-dark p-6">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold mb-8">API Testing Console</h1>
+
+        {loading && (
+          <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
+            Only one API test can run at a time. Please wait for the current request to finish.
+          </div>
+        )}
 
         {/* Test Sync-All API */}
         <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6 mb-8">
@@ -103,6 +115,7 @@ export default function TestApiPage() {
             </div>
 
             <button
+              type="button"
               onClick={testSyncAllApi}
               disabled={loading}
               className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg font-medium transition"
@@ -141,6 +154,7 @@ export default function TestApiPage() {
 
             <div className="flex gap-3 flex-wrap">
               <button
+                type="button"
                 onClick={() =>
                   testPduApi("pdu-odcdh3-b12-2.amd.com")
                 }
@@ -158,6 +172,7 @@ export default function TestApiPage() {
               </button>
 
               <button
+                type="button"
                 onClick={() =>
                   testPduApi("pdu-odcdh1-a12.amd.com")
                 }
@@ -175,6 +190,7 @@ export default function TestApiPage() {
               </button>
 
               <button
+                type="button"
                 onClick={() =>
                   testPduApi("pdu-odcdh4-wbd1.amd.com")
                 }

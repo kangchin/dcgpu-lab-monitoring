@@ -237,7 +237,7 @@ def get_pdu_info():
     Query parameters:
     - hostname: PDU hostname or FQDN (required)
     
-    Example: GET /api/pdu?hostname=pdu-odcdh3-b04-2.amd.com
+    Example: GET /api/pdu?hostname=pdu-odcdh3-b12-1.amd.com
     """
     try:
         hostname = request.args.get("hostname")
@@ -351,6 +351,8 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
     """
     Update a single PDU record with extracted information and metadata.
     
+    Ensures all required fields exist in the record.
+    
     Returns dict with: success (bool), reason (str if failed), details (dict)
     """
     try:
@@ -363,7 +365,26 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
                 "hostname": hostname
             }
         
+        # Initialize update_data with required fields if missing
         update_data = {"updated": now}
+        
+        # Ensure all required fields exist in the record
+        required_fields = {
+            "manufacturer": "",
+            "model": "",
+            "serial_number": "",
+            "mac_address": "",
+            "apparent_power_oid": "",
+            "site": "",
+            "data_hall": "",
+            "rack": "",
+            "level": "",
+            "locale": ""
+        }
+        
+        for field, default_value in required_fields.items():
+            if field not in pdu_record:
+                update_data[field] = default_value
         
         # Extract PDU information via SNMP with retry
         pdu_info = extract_pdu_info_with_retry(
@@ -404,7 +425,11 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
                 "locale": metadata.get("locale", "")
             })
         
-        # Update database record
+        # Ensure ip_address is preserved (from network scan step)
+        if "ip_address" not in update_data and pdu_record.get("ip_address"):
+            update_data["ip_address"] = pdu_record.get("ip_address")
+        
+        # Update database record with all fields
         collection.update_one(
             {"hostname": hostname},
             {"$set": update_data}
@@ -417,6 +442,7 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
             "success": True,
             "hostname": hostname,
             "details": {
+                "ip_address": updated_record.get("ip_address", "N/A"),
                 "manufacturer": updated_record.get("manufacturer", "N/A"),
                 "model": updated_record.get("model", "N/A"),
                 "serial_number": updated_record.get("serial_number", "N/A"),
@@ -547,11 +573,10 @@ def sync_all_pdus():
         )
         
         if result.get("status") == "error":
-            return jsonify({
-                "status": "error",
-                "message": f"Network scan failed: {result.get('message', 'Unknown error')}",
-                "timestamp": datetime.now().isoformat()
-            }), 500
+            # Network scan failed - log warning but continue with existing records
+            scan_error = result.get('message', 'Unknown error')
+            print(f"[WARN] Network scan failed: {scan_error}")
+            print("[WARN] Will proceed with existing PDU records from database")
         
         saved_pdus = []
         now = datetime.now()
@@ -574,9 +599,23 @@ def sync_all_pdus():
                     )
                     saved_pdus.append(hostname)
             else:
+                # Initialize new PDU record with all required fields
                 collection.insert_one({
                     "hostname": hostname,
                     "ip_address": ip_address,
+                    # SNMP extracted fields (initialized as empty)
+                    "manufacturer": "",
+                    "model": "",
+                    "serial_number": "",
+                    "mac_address": "",
+                    "apparent_power_oid": "",
+                    # Metadata fields (will be populated by parse_hostname_metadata)
+                    "site": "",
+                    "data_hall": "",
+                    "rack": "",
+                    "level": "",
+                    "locale": "",
+                    # Timestamps
                     "created": now,
                     "updated": now,
                 })
@@ -740,7 +779,7 @@ def parse_hostname_metadata(hostname: str) -> dict:
     
     Hostname patterns handled:
     1. pdu-{site}{datahall}-{rack}-{level}[.domain]
-       Examples: pdu-odcdh3-b04-2.amd.com, pdu-odcdh1-a06-2.amd.com
+       Examples: pdu-odcdh3-b12-1.amd.com, pdu-odcdh1-a12-2.amd.com
     2. pdu-{site}{datahall}-{rack}[.domain] (level defaults to "1")
        Examples: pdu-odcdh5-d3.amd.com, pdu-odcdh1-a12.amd.com
     3. Edge cases handled with defaults
@@ -749,9 +788,6 @@ def parse_hostname_metadata(hostname: str) -> dict:
     """
     locale_mapping = {
         "odc": "Penang",
-        "sg": "Singapore",
-        "us": "United States",
-        "eu": "Europe",
     }
     
     try:

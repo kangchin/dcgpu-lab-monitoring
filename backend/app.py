@@ -532,7 +532,7 @@ def openapi_spec():
                                 "type": "string"
                             },
                             "description": "PDU hostname or FQDN",
-                            "example": "pdu-odcdh3-b04-2.amd.com"
+                            "example": "pdu-odcdh3-b12-1.amd.com"
                         }
                     ],
                     "responses": {
@@ -542,9 +542,9 @@ def openapi_spec():
                                 "application/json": {
                                     "example": {
                                         "status": "success",
-                                        "hostname": "pdu-odcdh3-b04-2.amd.com",
+                                        "hostname": "pdu-odcdh3-b12-1.amd.com",
                                         "pdu_info": {
-                                            "hostname": "pdu-odcdh3-b04-2.amd.com",
+                                            "hostname": "pdu-odcdh3-b12-1.amd.com",
                                             "ip_address": "10.145.68.79",
                                             "manufacturer": "Tripp Lite",
                                             "model": "PDUH40LS",
