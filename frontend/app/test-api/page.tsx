@@ -39,7 +39,9 @@ export default function TestApiPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`API request failed with status ${response.status}`);
+        const errorData = await response.json().catch(() => null);
+        const message = errorData?.message || `API request failed with status ${response.status}`;
+        throw new Error(`${response.status} Unauthorized: ${message}`);
       }
 
       const data = await response.json();
