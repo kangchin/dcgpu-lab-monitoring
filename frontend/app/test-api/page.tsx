@@ -17,6 +17,10 @@ interface SyncResult {
 }
 
 export default function TestApiPage() {
+  const backendUrl = (
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    (process.env.NODE_ENV === "development" ? "http://localhost:5000" : "")
+  ).replace(/\/$/, "");
   const [loading, setLoading] = useState(false);
   const [activeRequest, setActiveRequest] = useState<"sync-all" | "pdu" | null>(null);
   const [result, setResult] = useState<SyncResult | null>(null);
@@ -30,7 +34,11 @@ export default function TestApiPage() {
     setResult(null);
 
     try {
-      const response = await fetch("http://localhost:5000/api/pdu/sync-all", {
+      if (!backendUrl) {
+        throw new Error("NEXT_PUBLIC_BACKEND_URL must be configured in production.");
+      }
+
+      const response = await fetch(`${backendUrl}/api/pdu/sync-all`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -41,7 +49,8 @@ export default function TestApiPage() {
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
         const message = errorData?.message || `API request failed with status ${response.status}`;
-        throw new Error(`${response.status} Unauthorized: ${message}`);
+        const statusLabel = response.status === 401 ? "Unauthorized" : response.statusText || "Request failed";
+        throw new Error(`${response.status} ${statusLabel}: ${message}`);
       }
 
       const data = await response.json();
@@ -61,8 +70,11 @@ export default function TestApiPage() {
     setResult(null);
 
     try {
+      if (!backendUrl) {
+        throw new Error("NEXT_PUBLIC_BACKEND_URL must be configured in production.");
+      }
       const response = await fetch(
-        `http://localhost:5000/api/pdu?hostname=${encodeURIComponent(hostname)}`,
+        `${backendUrl}/api/pdu?hostname=${encodeURIComponent(hostname)}`,
         {
           method: "GET",
           headers: {
