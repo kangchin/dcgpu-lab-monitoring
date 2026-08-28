@@ -17,7 +17,11 @@ interface SyncResult {
 }
 
 export default function TestApiPage() {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
+  const configuredBackendUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.trim();
+  const backendUrl = (
+    configuredBackendUrl ||
+    (process.env.NODE_ENV === "development" ? "http://localhost:5000" : "")
+  ).replace(/\/$/, "");
   const isProductionUsingLocalhost =
     process.env.NODE_ENV === "production" &&
     /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?$/i.test(backendUrl || "");
