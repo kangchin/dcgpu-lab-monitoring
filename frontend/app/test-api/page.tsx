@@ -108,6 +108,13 @@ export default function TestApiPage() {
           </div>
         )}
 
+        {isProductionUsingLocalhost && (
+          <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Production configuration warning: the backend URL is set to localhost. Configure
+            <code className="mx-1">NEXT_PUBLIC_BACKEND_URL</code> with the production backend URL.
+          </div>
+        )}
+
         {/* Test Sync-All API */}
         <div className="bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6 mb-8">
           <div className="border-b border-gray-200 dark:border-gray-700 pb-4 mb-6">
