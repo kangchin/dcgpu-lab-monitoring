@@ -17,6 +17,10 @@ interface SyncResult {
 }
 
 export default function TestApiPage() {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
+  const isProductionUsingLocalhost =
+    process.env.NODE_ENV === "production" &&
+    /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?$/i.test(backendUrl || "");
   const [loading, setLoading] = useState(false);
   const [activeRequest, setActiveRequest] = useState<"sync-all" | "pdu" | null>(null);
   const [result, setResult] = useState<SyncResult | null>(null);
@@ -30,7 +34,16 @@ export default function TestApiPage() {
     setResult(null);
 
     try {
-      const response = await fetch("http://localhost:5000/api/pdu/sync-all", {
+      if (!backendUrl) {
+        throw new Error("Backend URL is not configured. Set NEXT_PUBLIC_BACKEND_URL.");
+      }
+      if (isProductionUsingLocalhost) {
+        throw new Error(
+          "Production configuration error: /api/pdu/sync-all is using localhost. Set NEXT_PUBLIC_BACKEND_URL to the production backend URL."
+        );
+      }
+
+      const response = await fetch(`${backendUrl}/api/pdu/sync-all`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -41,7 +54,8 @@ export default function TestApiPage() {
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
         const message = errorData?.message || `API request failed with status ${response.status}`;
-        throw new Error(`${response.status} Unauthorized: ${message}`);
+        const statusLabel = response.status === 401 ? "Unauthorized" : response.statusText || "Request failed";
+        throw new Error(`${response.status} ${statusLabel}: ${message}`);
       }
 
       const data = await response.json();
@@ -61,8 +75,11 @@ export default function TestApiPage() {
     setResult(null);
 
     try {
+      if (!backendUrl) {
+        throw new Error("Backend URL is not configured. Set NEXT_PUBLIC_BACKEND_URL.");
+      }
       const response = await fetch(
-        `http://localhost:5000/api/pdu?hostname=${encodeURIComponent(hostname)}`,
+        `${backendUrl}/api/pdu?hostname=${encodeURIComponent(hostname)}`,
         {
           method: "GET",
           headers: {
@@ -93,6 +110,13 @@ export default function TestApiPage() {
         {loading && (
           <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-300">
             Only one API test can run at a time. Please wait for the current request to finish.
+          </div>
+        )}
+
+        {isProductionUsingLocalhost && (
+          <div className="mb-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            Production configuration warning: the backend URL is set to localhost. Configure
+            <code className="mx-1">NEXT_PUBLIC_BACKEND_URL</code> with the production backend URL.
           </div>
         )}
 
