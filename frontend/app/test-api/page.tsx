@@ -17,10 +17,10 @@ interface SyncResult {
 }
 
 export default function TestApiPage() {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
-  const isProductionUsingLocalhost =
-    process.env.NODE_ENV === "production" &&
-    /^(https?:\/\/)?(localhost|127\.0\.0\.1)(:\d+)?$/i.test(backendUrl || "");
+  const backendUrl = (
+    process.env.NEXT_PUBLIC_BACKEND_URL ||
+    (process.env.NODE_ENV === "development" ? "http://localhost:5000" : "")
+  ).replace(/\/$/, "");
   const [loading, setLoading] = useState(false);
   const [activeRequest, setActiveRequest] = useState<"sync-all" | "pdu" | null>(null);
   const [result, setResult] = useState<SyncResult | null>(null);
@@ -35,12 +35,7 @@ export default function TestApiPage() {
 
     try {
       if (!backendUrl) {
-        throw new Error("Backend URL is not configured. Set NEXT_PUBLIC_BACKEND_URL.");
-      }
-      if (isProductionUsingLocalhost) {
-        throw new Error(
-          "Production configuration error: /api/pdu/sync-all is using localhost. Set NEXT_PUBLIC_BACKEND_URL to the production backend URL."
-        );
+        throw new Error("NEXT_PUBLIC_BACKEND_URL must be configured in production.");
       }
 
       const response = await fetch(`${backendUrl}/api/pdu/sync-all`, {
@@ -76,7 +71,7 @@ export default function TestApiPage() {
 
     try {
       if (!backendUrl) {
-        throw new Error("Backend URL is not configured. Set NEXT_PUBLIC_BACKEND_URL.");
+        throw new Error("NEXT_PUBLIC_BACKEND_URL must be configured in production.");
       }
       const response = await fetch(
         `${backendUrl}/api/pdu?hostname=${encodeURIComponent(hostname)}`,
