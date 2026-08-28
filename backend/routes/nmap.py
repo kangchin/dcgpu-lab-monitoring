@@ -37,7 +37,7 @@ def serialize(doc):
     return doc
 
 # Admin password - should be stored in environment variable in production
-ADMIN_PASSWORD = os.environ.get("NMAP_ADMIN_PASSWORD", "admin123")
+ADMIN_PASSWORD = os.environ.get("NMAP_ADMIN_PASSWORD")
 
 
 # ===================================================================

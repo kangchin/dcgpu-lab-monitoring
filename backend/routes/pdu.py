@@ -76,6 +76,22 @@ MANUFACTURER_MAPPING = {
 }
 
 
+def resolve_apparent_power_oid(manufacturer: str) -> str:
+    """Return an apparent-power OID only for a recognized manufacturer."""
+    normalized = (manufacturer or "").strip()
+    manufacturer_key = MANUFACTURER_MAPPING.get(normalized)
+
+    if manufacturer_key and manufacturer_key in PDU_MANUFACTURERS:
+        return PDU_MANUFACTURERS[manufacturer_key].get("apparent_power", "")
+
+    normalized_lower = normalized.lower()
+    for manufacturer_key, metadata in PDU_MANUFACTURERS.items():
+        if normalized_lower == metadata.get("display_name", "").lower():
+            return metadata.get("apparent_power", "")
+
+    return ""
+
+
 # ============================================================================
 # SNMP Query Functions
 # ============================================================================
@@ -135,6 +151,20 @@ def snmp_query(hostname: str, oid: str, v2c: str = "amd123", timeout: int = 5) -
         return None
 
 
+def get_snmp_platform_notice() -> str:
+    """Return the platform-specific notice for SNMP/enrichment availability."""
+    current_os = platform.system()
+    if current_os == "Windows":
+        return (
+            "SNMP OID-based PDU metadata extraction is disabled on Windows because "
+            "manufacturer, model, serial number, MAC address, and apparent_power_oid "
+            "collection is not functional in development mode. The sync process skipped SNMP enrichment."
+        )
+    if current_os == "Linux":
+        return "SNMP OID-based extraction is enabled on Linux."
+    return "SNMP OID-based extraction is not available on this platform."
+
+
 def extract_pdu_info(hostname: str, ip_address: str = "", v2c: str = "amd123") -> Dict:
     """
     Extract PDU information via SNMP queries.
@@ -150,6 +180,27 @@ def extract_pdu_info(hostname: str, ip_address: str = "", v2c: str = "amd123") -
     Returns:
         Dictionary containing PDU information
     """
+    current_os = platform.system()
+    if current_os == "Windows":
+        logger.warning(
+            "Skipping SNMP OID extraction for %s on %s. %s",
+            hostname,
+            current_os,
+            get_snmp_platform_notice(),
+        )
+        return {
+            "hostname": hostname,
+            "ip_address": ip_address,
+            "manufacturer": "",
+            "model": "",
+            "serial_number": "",
+            "mac_address": "",
+            "apparent_power_oid": "",
+            "error": "SNMP OID-based extraction skipped on Windows platform",
+            "snmp_skipped": True,
+            "notice": get_snmp_platform_notice(),
+        }
+
     pdu_info = {
         "hostname": hostname,
         "ip_address": ip_address,
@@ -208,8 +259,10 @@ def extract_pdu_info(hostname: str, ip_address: str = "", v2c: str = "amd123") -
             if mac:
                 pdu_info["mac_address"] = mac
             
-            # Store apparent power OID reference (hardcoded for this manufacturer)
-            pdu_info["apparent_power_oid"] = oids.get("apparent_power", "")
+            # Store the OID only after the detected manufacturer matches a known profile.
+            pdu_info["apparent_power_oid"] = resolve_apparent_power_oid(
+                pdu_info["manufacturer"]
+            )
             
             logger.info(f"Successfully extracted info for {hostname}: {pdu_info['manufacturer']}")
             return pdu_info
@@ -393,15 +446,44 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
             v2c=v2c,
             max_retries=3
         )
-        
-        # Check if extraction failed
-        if isinstance(pdu_info, dict) and "error" in pdu_info:
-            if platform.system() != "Windows":
+
+        # Skip SNMP enrichment only on Windows and surface a clear notice.
+        if isinstance(pdu_info, dict) and pdu_info.get("snmp_skipped"):
+            update_data.update({
+                "manufacturer": "",
+                "model": "",
+                "serial_number": "",
+                "mac_address": "",
+                "apparent_power_oid": "",
+            })
+            notice = pdu_info.get("notice", get_snmp_platform_notice())
+            logger.warning("SNMP enrichment skipped for %s on %s. %s", hostname, platform.system(), notice)
+        elif isinstance(pdu_info, dict) and "error" in pdu_info:
+            if platform.system() == "Windows":
                 return {
-                    "success": False,
-                    "reason": pdu_info.get("error", "SNMP extraction failed"),
-                    "hostname": hostname
+                    "success": True,
+                    "hostname": hostname,
+                    "snmp_skipped": True,
+                    "notice": get_snmp_platform_notice(),
+                    "details": {
+                        "ip_address": pdu_record.get("ip_address", "N/A"),
+                        "manufacturer": "N/A",
+                        "model": "N/A",
+                        "serial_number": "N/A",
+                        "mac_address": "N/A",
+                        "apparent_power_oid": "N/A",
+                        "site": pdu_record.get("site", "N/A"),
+                        "data_hall": pdu_record.get("data_hall", "N/A"),
+                        "rack": pdu_record.get("rack", "N/A"),
+                        "level": pdu_record.get("level", "N/A"),
+                        "locale": pdu_record.get("locale", "N/A")
+                    }
                 }
+            return {
+                "success": False,
+                "hostname": hostname,
+                "reason": pdu_info.get("error", "SNMP extraction failed"),
+            }
         else:
             # SNMP extraction succeeded
             update_data.update({
@@ -499,19 +581,12 @@ def populate_apparent_power_oids(collection) -> dict:
             hostname = record.get("hostname", "unknown")
             manufacturer = record.get("manufacturer", "")
             
-            # Skip if already has apparent_power_oid with a value
-            if record.get("apparent_power_oid"):
+            # Resolve from the manufacturer every time so stale or mismatched OIDs are cleared.
+            apparent_power_oid = resolve_apparent_power_oid(manufacturer)
+
+            if record.get("apparent_power_oid") == apparent_power_oid:
                 stats["skipped"] += 1
                 continue
-            
-            # Look up the manufacturer OID
-            manufacturer_key = MANUFACTURER_MAPPING.get(manufacturer)
-            
-            if not manufacturer_key or manufacturer_key not in PDU_MANUFACTURERS:
-                # Unknown manufacturer - set to empty string
-                apparent_power_oid = ""
-            else:
-                apparent_power_oid = PDU_MANUFACTURERS[manufacturer_key].get("apparent_power", "")
             
             # Update the record
             try:
@@ -554,8 +629,6 @@ def sync_all_pdus():
     Example: POST /api/pdu/sync-all
     """
     try:
-        import requests
-        
         print("\n" + "=" * 80)
         print("[*] Starting PDU synchronization via API")
         print("=" * 80)
@@ -571,12 +644,17 @@ def sync_all_pdus():
             is_windows_with_scanner_service,
             get_scanner_service_url,
         )
+        scan_error = ""
         
         if result.get("status") == "error":
             # Network scan failed - log warning but continue with existing records
             scan_error = result.get('message', 'Unknown error')
             print(f"[WARN] Network scan failed: {scan_error}")
             print("[WARN] Will proceed with existing PDU records from database")
+        else:
+            scan_message = result.get("message", "")
+            if any(keyword in scan_message.lower() for keyword in ("failed", "timed out", "not found")):
+                scan_error = scan_message
         
         saved_pdus = []
         now = datetime.now()
@@ -641,6 +719,19 @@ def sync_all_pdus():
         
         if not hostnames:
             print("[WARN] No PDU records to process")
+            if scan_error:
+                return jsonify({
+                    "status": "error",
+                    "message": scan_error,
+                    "sync_result": {
+                        "status": "error",
+                        "message": "Network scan failed and no existing PDU records were available",
+                        "pdu_count": 0,
+                        "successful_updates": 0,
+                        "failed_updates": 0
+                    },
+                    "timestamp": datetime.now().isoformat()
+                }), 503
             return jsonify({
                 "status": "success",
                 "message": "PDU sync completed with 0 records",
@@ -724,6 +815,7 @@ def sync_all_pdus():
         print(f"[OK] Migration complete: {migration_stats['updated']} updated, {migration_stats['skipped']} skipped, {migration_stats['errors']} errors")
         
         # Summary
+        platform_notice = get_snmp_platform_notice()
         print("\n" + "=" * 80)
         print("[SUMMARY] PDU Synchronization Summary:")
         print(f"  Total PDUs processed: {pdu_count}")
@@ -731,15 +823,26 @@ def sync_all_pdus():
         print(f"  Failed updates: {failed_updates}")
         print(f"  Success rate: {(successful_updates/pdu_count*100):.1f}%" if pdu_count > 0 else "  Success rate: N/A")
         print(f"  Execution time: {sync_duration:.2f} seconds")
+        print(f"  Platform: {platform.system()}")
+        print(f"  SNMP notice: {platform_notice}")
         print(f"\n  Apparent Power OID Migration:")
         print(f"    Records processed: {migration_stats['total_processed']}")
         print(f"    Records updated: {migration_stats['updated']}")
         print(f"    Records skipped: {migration_stats['skipped']}")
         print("=" * 80)
-        
+
+        status_message = "PDU synchronization completed successfully"
+        if platform.system() == "Windows":
+            status_message = (
+                "PDU synchronization completed with SNMP OID-based metadata extraction skipped "
+                "on Windows (manufacturer, model, serial number, MAC address, and apparent_power_oid)"
+            )
+
         return jsonify({
             "status": "success",
-            "message": "PDU synchronization completed successfully",
+            "message": status_message,
+            "notice": platform_notice,
+            "platform": platform.system(),
             "sync_result": {
                 "status": "success",
                 "message": f"PDU sync completed: {successful_updates}/{pdu_count} records updated",
@@ -748,7 +851,8 @@ def sync_all_pdus():
                 "failed_updates": failed_updates,
                 "success_rate": f"{(successful_updates/pdu_count*100):.1f}%" if pdu_count > 0 else "N/A",
                 "execution_time_seconds": round(sync_duration, 2),
-                "failed_pdus": failed_pdus,  # Include details of failed PDUs
+                "failed_pdus": failed_pdus,
+                "snmp_notice": platform_notice,
                 "migration": {
                     "apparent_power_oid": {
                         "total_processed": migration_stats["total_processed"],
