@@ -39,10 +39,6 @@ interface SyncResponse {
 }
 
 export default function PduPage() {
-  const backendUrl = (
-    process.env.NEXT_PUBLIC_BACKEND_URL ||
-    (process.env.NODE_ENV === "development" ? "http://localhost:5000" : "")
-  ).replace(/\/$/, "");
   const [isSyncing, setIsSyncing] = useState(false);
   const [result, setResult] = useState<SyncResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,11 +51,7 @@ export default function PduPage() {
     setError(null);
 
     try {
-      if (!backendUrl) {
-        throw new Error("NEXT_PUBLIC_BACKEND_URL is not configured");
-      }
-
-      const response = await fetch(`${backendUrl}/api/pdu/sync-all`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/sync-all`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
