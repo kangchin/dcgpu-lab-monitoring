@@ -1,6 +1,6 @@
 "use client";
 
-import { Home, Factory, Moon, Thermometer, Radar, Zap } from "lucide-react";
+import { Database, Home, Factory, Moon, Thermometer, Radar, Zap } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Fragment } from "react";
 import {
@@ -40,6 +40,12 @@ const items = [
     title: "Nmap Scan",
     url: "/nmap",
     icon: Radar,
+    activeIndicator: "",
+  },
+  {
+    title: "PDU",
+    url: "/pdu",
+    icon: Database,
     activeIndicator: "",
   },
   {
