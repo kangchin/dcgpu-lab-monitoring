@@ -8,3 +8,4 @@ requests
 flasgger
 pydantic
 pysnmp
+snmp
