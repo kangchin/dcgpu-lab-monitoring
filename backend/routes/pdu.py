@@ -446,6 +446,19 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
             v2c=v2c,
             max_retries=3
         )
+        
+        # Parse hostname to extract infrastructure metadata (always do this, SNMP-independent)
+        metadata = parse_hostname_metadata(hostname)
+        
+        # Add extracted metadata
+        if metadata:
+            update_data.update({
+                "site": metadata.get("site", ""),
+                "data_hall": metadata.get("data_hall", ""),
+                "rack": metadata.get("rack", ""),
+                "level": metadata.get("level", ""),
+                "locale": metadata.get("locale", "")
+            })
 
         # Skip SNMP enrichment only on Windows and surface a clear notice.
         if isinstance(pdu_info, dict) and pdu_info.get("snmp_skipped"):
@@ -472,11 +485,11 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
                         "serial_number": "N/A",
                         "mac_address": "N/A",
                         "apparent_power_oid": "N/A",
-                        "site": pdu_record.get("site", "N/A"),
-                        "data_hall": pdu_record.get("data_hall", "N/A"),
-                        "rack": pdu_record.get("rack", "N/A"),
-                        "level": pdu_record.get("level", "N/A"),
-                        "locale": pdu_record.get("locale", "N/A")
+                        "site": metadata.get("site", "N/A"),
+                        "data_hall": metadata.get("data_hall", "N/A"),
+                        "rack": metadata.get("rack", "N/A"),
+                        "level": metadata.get("level", "N/A"),
+                        "locale": metadata.get("locale", "N/A")
                     }
                 }
             return {
@@ -492,19 +505,6 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
                 "serial_number": pdu_info.get("serial_number", ""),
                 "mac_address": pdu_info.get("mac_address", ""),
                 "apparent_power_oid": pdu_info.get("apparent_power_oid", "")
-            })
-        
-        # Parse hostname to extract infrastructure metadata
-        metadata = parse_hostname_metadata(hostname)
-        
-        # Add extracted metadata
-        if metadata:
-            update_data.update({
-                "site": metadata.get("site", ""),
-                "data_hall": metadata.get("data_hall", ""),
-                "rack": metadata.get("rack", ""),
-                "level": metadata.get("level", ""),
-                "locale": metadata.get("locale", "")
             })
         
         # Ensure ip_address is preserved (from network scan step)

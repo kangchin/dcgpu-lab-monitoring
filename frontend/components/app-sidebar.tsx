@@ -55,12 +55,6 @@ const items = [
     activeIndicator: "",
   },
   {
-    title: "Test API",
-    url: "/test-api",
-    icon: Zap,
-    activeIndicator: "",
-  },
-  {
     title: "OpenDC",
     url: "/opendc/overview",
     icon: Factory,
