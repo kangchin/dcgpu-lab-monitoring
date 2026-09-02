@@ -9,4 +9,3 @@ flasgger
 pydantic
 pysnmp
 snmp
-snmpd
