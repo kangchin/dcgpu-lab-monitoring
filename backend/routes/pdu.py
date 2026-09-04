@@ -1,6 +1,7 @@
 from datetime import datetime
-import platform
+import asyncio
 import os
+import re
 import time
 import subprocess
 import logging
@@ -22,9 +23,17 @@ pdu = Blueprint("pdu", __name__)
 
 logger = logging.getLogger(__name__)
 
-# Try to import pysnmp (optional)
+# pysnmp>=6 dropped the old synchronous hlapi; use the current asyncio hlapi (v3arch) instead.
 try:
-    from pysnmp.hlapi import getCmd, SnmpEngine, CommunityData, UdpTransportTarget, ContextData
+    from pysnmp.hlapi.v3arch.asyncio import (
+        get_cmd,
+        SnmpEngine,
+        CommunityData,
+        UdpTransportTarget,
+        ContextData,
+        ObjectType,
+        ObjectIdentity,
+    )
     PYSNMP_AVAILABLE = True
 except ImportError:
     PYSNMP_AVAILABLE = False
@@ -92,48 +101,83 @@ def resolve_apparent_power_oid(manufacturer: str) -> str:
     return ""
 
 
+def normalize_mac_address(value: str) -> str:
+    """Normalize vendor MAC formats to AA:BB:CC:DD:EE:FF.
+
+    Enlogic/Raritan return 6 raw bytes that pysnmp stringifies as latin-1 text;
+    Tripp Lite returns an already-formatted DisplayString.
+    """
+    if not value:
+        return ""
+
+    candidate = value.strip()
+
+    if re.fullmatch(r"[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}", candidate):
+        return candidate.replace("-", ":").upper()
+
+    hex_form = candidate[2:] if candidate.lower().startswith("0x") else candidate
+    hex_form = hex_form.replace(".", "")
+    if re.fullmatch(r"[0-9A-Fa-f]{12}", hex_form):
+        return ":".join(hex_form[i:i + 2] for i in range(0, 12, 2)).upper()
+
+    if len(candidate) == 6:
+        try:
+            raw = candidate.encode("latin-1").hex()
+            return ":".join(raw[i:i + 2] for i in range(0, 12, 2)).upper()
+        except UnicodeEncodeError:
+            pass
+
+    logger.warning("Unrecognized MAC address format: %r", value)
+    return ""
+
+
 # ============================================================================
 # SNMP Query Functions
 # ============================================================================
 
-def snmp_query(hostname: str, oid: str, v2c: str = "amd123", timeout: int = 5) -> Optional[str]:
+async def _snmp_get_async(hostname: str, oid: str, community: str, timeout: int) -> Optional[str]:
+    """Issue a single SNMPv2c GET using pysnmp's asyncio hlapi (v3arch)."""
+    snmp_engine = SnmpEngine()
+    try:
+        transport = await UdpTransportTarget.create((hostname, 161), timeout=timeout, retries=0)
+        error_indication, error_status, error_index, var_binds = await get_cmd(
+            snmp_engine,
+            CommunityData(community, mpModel=1),  # SNMPv2c
+            transport,
+            ContextData(),
+            ObjectType(ObjectIdentity(oid)),
+        )
+
+        if error_indication or error_status:
+            logger.debug(f"SNMP query failed for {hostname} OID {oid}: {error_indication or error_status}")
+            return None
+
+        for var_bind in var_binds:
+            return str(var_bind[1])
+
+        return None
+    finally:
+        snmp_engine.close_dispatcher()
+
+
+def snmp_query(hostname: str, oid: str, v2c: str = "amd123", timeout: int = 2) -> Optional[str]:
     """
-    Query a single SNMP OID using pysnmp or subprocess fallback.
+    Query a single SNMP OID using pysnmp (asyncio hlapi) or subprocess snmpget fallback.
     
     Args:
         hostname: Target hostname or IP address
         oid: SNMP Object Identifier to query
         v2c: SNMP v2c community string (default: "amd123")
-        timeout: Query timeout in seconds (default: 5)
+        timeout: Query timeout in seconds (default: 2)
     
     Returns:
         String value from SNMP response, or None if query fails
     """
     try:
         if PYSNMP_AVAILABLE:
-            # Use pysnmp library
-            snmp_engine = SnmpEngine()
-            iterator = getCmd(
-                snmp_engine,
-                CommunityData(v2c, mpModel=1),  # SNMPv2c
-                UdpTransportTarget((hostname, 161), timeout=timeout),
-                ContextData(),
-                oid
-            )
-            
-            error_indication, error_status, error_index, var_binds = next(iterator)
-            
-            if error_indication or error_status:
-                logger.debug(f"SNMP query failed for {hostname} OID {oid}")
-                return None
-            
-            # Extract the value
-            for var_bind in var_binds:
-                return str(var_bind[1])
-            
-            return None
+            return asyncio.run(_snmp_get_async(hostname, oid, v2c, timeout))
         else:
-            # Fallback to subprocess snmpget
+            # Fallback to subprocess snmpget (requires net-snmp-utils / snmp package on the OS)
             result = subprocess.run(
                 ["snmpget", "-v2c", "-c", v2c, "-Oqv", hostname, oid],
                 capture_output=True,
@@ -151,20 +195,6 @@ def snmp_query(hostname: str, oid: str, v2c: str = "amd123", timeout: int = 5) -
         return None
 
 
-def get_snmp_platform_notice() -> str:
-    """Return the platform-specific notice for SNMP/enrichment availability."""
-    current_os = platform.system()
-    if current_os == "Windows":
-        return (
-            "SNMP OID-based PDU metadata extraction is disabled on Windows because "
-            "manufacturer, model, serial number, MAC address, and apparent_power_oid "
-            "collection is not functional in development mode. The sync process skipped SNMP enrichment."
-        )
-    if current_os == "Linux":
-        return "SNMP OID-based extraction is enabled on Linux."
-    return "SNMP OID-based extraction is not available on this platform."
-
-
 def extract_pdu_info(hostname: str, ip_address: str = "", v2c: str = "amd123") -> Dict:
     """
     Extract PDU information via SNMP queries.
@@ -180,27 +210,6 @@ def extract_pdu_info(hostname: str, ip_address: str = "", v2c: str = "amd123") -
     Returns:
         Dictionary containing PDU information
     """
-    current_os = platform.system()
-    if current_os == "Windows":
-        logger.warning(
-            "Skipping SNMP OID extraction for %s on %s. %s",
-            hostname,
-            current_os,
-            get_snmp_platform_notice(),
-        )
-        return {
-            "hostname": hostname,
-            "ip_address": ip_address,
-            "manufacturer": "",
-            "model": "",
-            "serial_number": "",
-            "mac_address": "",
-            "apparent_power_oid": "",
-            "error": "SNMP OID-based extraction skipped on Windows platform",
-            "snmp_skipped": True,
-            "notice": get_snmp_platform_notice(),
-        }
-
     pdu_info = {
         "hostname": hostname,
         "ip_address": ip_address,
@@ -257,7 +266,7 @@ def extract_pdu_info(hostname: str, ip_address: str = "", v2c: str = "amd123") -
             # Query MAC address
             mac = snmp_query(hostname, oids["mac_address"], v2c)
             if mac:
-                pdu_info["mac_address"] = mac
+                pdu_info["mac_address"] = normalize_mac_address(mac)
             
             # Store the OID only after the detected manufacturer matches a known profile.
             pdu_info["apparent_power_oid"] = resolve_apparent_power_oid(
@@ -400,16 +409,13 @@ def extract_pdu_info_with_retry(hostname: str, ip_address: str, v2c: str = "amd1
     return {"error": last_error or "Unknown error"}
 
 
-def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd123") -> dict:
+def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd123", max_retries: int = 3) -> dict:
     """
-    Update a single PDU record with extracted information and metadata.
-    
-    Ensures all required fields exist in the record.
+    Update a single PDU record with SNMP-extracted data and hostname-parsed metadata.
     
     Returns dict with: success (bool), reason (str if failed), details (dict)
     """
     try:
-        # Get existing PDU record
         pdu_record = collection.find_one({"hostname": hostname})
         if not pdu_record:
             return {
@@ -418,100 +424,39 @@ def update_single_pdu(hostname: str, collection, now: datetime, v2c: str = "amd1
                 "hostname": hostname
             }
         
-        # Initialize update_data with required fields if missing
-        update_data = {"updated": now}
-        
-        # Ensure all required fields exist in the record
-        required_fields = {
-            "manufacturer": "",
-            "model": "",
-            "serial_number": "",
-            "mac_address": "",
-            "apparent_power_oid": "",
-            "site": "",
-            "data_hall": "",
-            "rack": "",
-            "level": "",
-            "locale": ""
+        # Hostname parsing is SNMP-independent, so metadata is always populated.
+        metadata = parse_hostname_metadata(hostname)
+        update_data = {
+            "updated": now,
+            "site": metadata.get("site", ""),
+            "data_hall": metadata.get("data_hall", ""),
+            "rack": metadata.get("rack", ""),
+            "level": metadata.get("level", ""),
+            "locale": metadata.get("locale", "")
         }
         
-        for field, default_value in required_fields.items():
-            if field not in pdu_record:
-                update_data[field] = default_value
-        
-        # Extract PDU information via SNMP with retry
         pdu_info = extract_pdu_info_with_retry(
             hostname,
             ip_address=pdu_record.get("ip_address", ""),
             v2c=v2c,
-            max_retries=3
+            max_retries=max_retries
         )
         
-        # Parse hostname to extract infrastructure metadata (always do this, SNMP-independent)
-        metadata = parse_hostname_metadata(hostname)
-        
-        # Add extracted metadata
-        if metadata:
-            update_data.update({
-                "site": metadata.get("site", ""),
-                "data_hall": metadata.get("data_hall", ""),
-                "rack": metadata.get("rack", ""),
-                "level": metadata.get("level", ""),
-                "locale": metadata.get("locale", "")
-            })
-
-        # Skip SNMP enrichment only on Windows and surface a clear notice.
-        if isinstance(pdu_info, dict) and pdu_info.get("snmp_skipped"):
-            update_data.update({
-                "manufacturer": "",
-                "model": "",
-                "serial_number": "",
-                "mac_address": "",
-                "apparent_power_oid": "",
-            })
-            notice = pdu_info.get("notice", get_snmp_platform_notice())
-            logger.warning("SNMP enrichment skipped for %s on %s. %s", hostname, platform.system(), notice)
-        elif isinstance(pdu_info, dict) and "error" in pdu_info:
-            if platform.system() == "Windows":
-                return {
-                    "success": True,
-                    "hostname": hostname,
-                    "snmp_skipped": True,
-                    "notice": get_snmp_platform_notice(),
-                    "details": {
-                        "ip_address": pdu_record.get("ip_address", "N/A"),
-                        "manufacturer": "N/A",
-                        "model": "N/A",
-                        "serial_number": "N/A",
-                        "mac_address": "N/A",
-                        "apparent_power_oid": "N/A",
-                        "site": metadata.get("site", "N/A"),
-                        "data_hall": metadata.get("data_hall", "N/A"),
-                        "rack": metadata.get("rack", "N/A"),
-                        "level": metadata.get("level", "N/A"),
-                        "locale": metadata.get("locale", "N/A")
-                    }
-                }
+        if isinstance(pdu_info, dict) and "error" in pdu_info:
             return {
                 "success": False,
                 "hostname": hostname,
                 "reason": pdu_info.get("error", "SNMP extraction failed"),
             }
-        else:
-            # SNMP extraction succeeded
-            update_data.update({
-                "manufacturer": pdu_info.get("manufacturer", ""),
-                "model": pdu_info.get("model", ""),
-                "serial_number": pdu_info.get("serial_number", ""),
-                "mac_address": pdu_info.get("mac_address", ""),
-                "apparent_power_oid": pdu_info.get("apparent_power_oid", "")
-            })
         
-        # Ensure ip_address is preserved (from network scan step)
-        if "ip_address" not in update_data and pdu_record.get("ip_address"):
-            update_data["ip_address"] = pdu_record.get("ip_address")
+        update_data.update({
+            "manufacturer": pdu_info.get("manufacturer", ""),
+            "model": pdu_info.get("model", ""),
+            "serial_number": pdu_info.get("serial_number", ""),
+            "mac_address": pdu_info.get("mac_address", ""),
+            "apparent_power_oid": pdu_info.get("apparent_power_oid", "")
+        })
         
-        # Update database record with all fields
         collection.update_one(
             {"hostname": hostname},
             {"$set": update_data}
@@ -612,6 +557,39 @@ def populate_apparent_power_oids(collection) -> dict:
         return stats
 
 
+def normalize_stored_mac_addresses(collection) -> dict:
+    """Repair MAC values stored before format normalization."""
+    stats = {"total_processed": 0, "updated": 0, "skipped": 0, "errors": 0}
+    now = datetime.now()
+
+    try:
+        for record in collection.find({}, {"mac_address": 1}):
+            stats["total_processed"] += 1
+            current = record.get("mac_address", "")
+            normalized = normalize_mac_address(current)
+
+            if normalized == current:
+                stats["skipped"] += 1
+                continue
+
+            try:
+                collection.update_one(
+                    {"_id": record["_id"]},
+                    {"$set": {"mac_address": normalized, "updated": now}},
+                )
+                stats["updated"] += 1
+            except Exception as e:
+                print(f"[ERROR] Failed to normalize MAC for {record.get('_id')}: {e}")
+                stats["errors"] += 1
+
+        return stats
+
+    except Exception as e:
+        print(f"[ERROR] MAC normalization failed: {str(e)}")
+        stats["errors"] += 1
+        return stats
+
+
 @pdu.route("/sync-all", methods=["POST"])
 def sync_all_pdus():
     """
@@ -701,21 +679,37 @@ def sync_all_pdus():
         
         pdu_count = len(saved_pdus)
         print(f"[OK] Processed {pdu_count} PDU records from network scan")
-        
-        # Get list of hostnames to update
-        hostnames = saved_pdus if saved_pdus else []
-        
-        # If no PDUs found from network scan, fetch all PDUs from database
-        if pdu_count == 0:
-            print("[WARN] No new PDU records from network scan, fetching all PDUs from database...")
-            try:
-                existing_pdus = collection.find({})
-                hostnames = [pdu.get('hostname') for pdu in existing_pdus if pdu.get('hostname')]
-                pdu_count = len(hostnames)
-                print(f"[INFO] Found {pdu_count} existing PDU records in database")
-            except Exception as db_error:
-                print(f"[WARN] Could not fetch PDUs from database: {db_error}")
-                hostnames = []
+
+        scanned = list(dict.fromkeys(saved_pdus))
+        scanned_set = set(scanned)
+
+        # apparent_power_oid is derived locally in step 3, so it is not an SNMP re-extract trigger.
+        snmp_fields = ("manufacturer", "model", "serial_number", "mac_address")
+
+        def _blank(field):
+            return {"$or": [
+                {field: {"$exists": False}},
+                {field: None},
+                {field: {"$regex": r"^\s*$"}},
+            ]}
+
+        incomplete, never_responded = [], set()
+        try:
+            # Any blank OID-sourced field re-triggers extraction of all of them.
+            incomplete_query = {"$or": [_blank(field) for field in snmp_fields]}
+            for doc in collection.find(incomplete_query, {"hostname": 1, "manufacturer": 1}):
+                doc_hostname = doc.get("hostname")
+                if not doc_hostname or doc_hostname in scanned_set:
+                    continue
+                incomplete.append(doc_hostname)
+                if not str(doc.get("manufacturer") or "").strip():
+                    never_responded.add(doc_hostname)
+            print(f"[INFO] Found {len(incomplete)} PDU records with incomplete SNMP data to re-extract")
+        except Exception as db_error:
+            print(f"[WARN] Could not query incomplete PDU records: {db_error}")
+
+        hostnames = scanned + incomplete
+        pdu_count = len(hostnames)
         
         if not hostnames:
             print("[WARN] No PDU records to process")
@@ -754,14 +748,15 @@ def sync_all_pdus():
         failed_updates = 0
         failed_pdus = []  # Track failed PDUs with reasons
         
-        # Use ThreadPoolExecutor for parallel processing
-        # Adjust max_workers based on system load (default: 5 concurrent updates)
-        max_workers = min(5, len(hostnames))
+        max_workers = min(25, len(hostnames))
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
+            # Hosts that never answered SNMP get one cheap attempt; proven-reachable hosts absorb UDP loss with retries.
             future_to_hostname = {
-                executor.submit(update_single_pdu, hostname, collection, now, "amd123"): hostname
+                executor.submit(
+                    update_single_pdu, hostname, collection, now, "amd123",
+                    1 if hostname in never_responded else 3,
+                ): hostname
                 for hostname in hostnames
             }
             
@@ -813,9 +808,12 @@ def sync_all_pdus():
         print("\n[*] Step 3: Populating apparent_power_oid field for all PDU records...")
         migration_stats = populate_apparent_power_oids(collection)
         print(f"[OK] Migration complete: {migration_stats['updated']} updated, {migration_stats['skipped']} skipped, {migration_stats['errors']} errors")
+
+        print("\n[*] Step 3b: Normalizing stored MAC address formats...")
+        mac_stats = normalize_stored_mac_addresses(collection)
+        print(f"[OK] MAC normalization complete: {mac_stats['updated']} updated, {mac_stats['skipped']} skipped, {mac_stats['errors']} errors")
         
         # Summary
-        platform_notice = get_snmp_platform_notice()
         print("\n" + "=" * 80)
         print("[SUMMARY] PDU Synchronization Summary:")
         print(f"  Total PDUs processed: {pdu_count}")
@@ -823,26 +821,19 @@ def sync_all_pdus():
         print(f"  Failed updates: {failed_updates}")
         print(f"  Success rate: {(successful_updates/pdu_count*100):.1f}%" if pdu_count > 0 else "  Success rate: N/A")
         print(f"  Execution time: {sync_duration:.2f} seconds")
-        print(f"  Platform: {platform.system()}")
-        print(f"  SNMP notice: {platform_notice}")
         print(f"\n  Apparent Power OID Migration:")
         print(f"    Records processed: {migration_stats['total_processed']}")
         print(f"    Records updated: {migration_stats['updated']}")
         print(f"    Records skipped: {migration_stats['skipped']}")
+        print(f"\n  MAC Address Normalization:")
+        print(f"    Records processed: {mac_stats['total_processed']}")
+        print(f"    Records updated: {mac_stats['updated']}")
+        print(f"    Records skipped: {mac_stats['skipped']}")
         print("=" * 80)
-
-        status_message = "PDU synchronization completed successfully"
-        if platform.system() == "Windows":
-            status_message = (
-                "PDU synchronization completed with SNMP OID-based metadata extraction skipped "
-                "on Windows (manufacturer, model, serial number, MAC address, and apparent_power_oid)"
-            )
 
         return jsonify({
             "status": "success",
-            "message": status_message,
-            "notice": platform_notice,
-            "platform": platform.system(),
+            "message": "PDU synchronization completed successfully",
             "sync_result": {
                 "status": "success",
                 "message": f"PDU sync completed: {successful_updates}/{pdu_count} records updated",
@@ -851,14 +842,21 @@ def sync_all_pdus():
                 "failed_updates": failed_updates,
                 "success_rate": f"{(successful_updates/pdu_count*100):.1f}%" if pdu_count > 0 else "N/A",
                 "execution_time_seconds": round(sync_duration, 2),
+                "scanned_count": len(scanned),
+                "reextracted_count": len(incomplete),
                 "failed_pdus": failed_pdus,
-                "snmp_notice": platform_notice,
                 "migration": {
                     "apparent_power_oid": {
                         "total_processed": migration_stats["total_processed"],
                         "updated": migration_stats["updated"],
                         "skipped": migration_stats["skipped"],
                         "errors": migration_stats["errors"]
+                    },
+                    "mac_address": {
+                        "total_processed": mac_stats["total_processed"],
+                        "updated": mac_stats["updated"],
+                        "skipped": mac_stats["skipped"],
+                        "errors": mac_stats["errors"]
                     }
                 }
             },

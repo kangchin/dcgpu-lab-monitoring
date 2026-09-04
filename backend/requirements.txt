@@ -7,5 +7,4 @@ redis
 requests
 flasgger
 pydantic
-pysnmp
-snmp
+pysnmp>=6.0
