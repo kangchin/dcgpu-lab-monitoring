@@ -21,40 +21,14 @@ export default function OpenDCRoom1() {
 
   const getCurrPower = async () => {
     try {
-      const listResponse = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/list?site=odc&data_hall=dh1`
+      const response = await axios.get(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/power/latest?site=odcdh1`
       );
-      const pdus = listResponse.data?.pdus || [];
-
-      const readings = await Promise.all(
-        pdus.map(async (pdu: any) => {
-          try {
-            const powerResponse = await axios.get(
-              `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/power/latest?hostname=${encodeURIComponent(
-                pdu.hostname
-              )}`
-            );
-
-            return {
-              pdu_hostname: pdu.hostname,
-              rack: pdu.rack,
-              level: pdu.level,
-              location: [pdu.rack, pdu.level].filter(Boolean).join("-"),
-              reading: powerResponse.data?.power?.reading,
-              symbol: powerResponse.data?.power?.unit,
-              created: powerResponse.data?.timestamp,
-            };
-          } catch (error) {
-            console.error(`Failed to read power for ${pdu.hostname}:`, error);
-            return null;
-          }
-        })
-      );
-
-      setCurrPower(readings.filter(Boolean));
+      if (response && response.status === 200) {
+        setCurrPower(response.data || []);
+      }
     } catch (e) {
-      console.error("Failed to fetch PDU power:", e);
-      setCurrPower([]);
+      console.log(e);
     }
   };
 

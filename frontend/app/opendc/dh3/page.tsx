@@ -86,101 +86,8 @@ export default function OpenDCRoom3() {
   const { theme } = useTheme();
   const router = useRouter();
   const [currPower, setCurrPower] = useState<any[]>([]);
-  const [currTemperature, setCurrTemperature] = useState<any[]>([]);
   const [rackPDUs, setRackPDUs] = useState<any>({});
   const [rackTemperature, setRackTemperature] = useState<any>({});
-
-  const getCurrPower = async () => {
-    try {
-      const listResponse = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/list?site=odc&data_hall=dh3`
-      );
-      const pdus = listResponse.data?.pdus || [];
-
-      const readings = await Promise.all(
-        pdus.map(async (pdu: any) => {
-          try {
-            const powerResponse = await axios.get(
-              `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/power/latest?hostname=${encodeURIComponent(
-                pdu.hostname
-              )}`
-            );
-
-            return {
-              pdu_hostname: pdu.hostname,
-              rack: pdu.rack,
-              level: pdu.level,
-              location: [pdu.rack, pdu.level].filter(Boolean).join("-"),
-              reading: powerResponse.data?.power?.reading,
-              symbol: powerResponse.data?.power?.unit,
-              created: powerResponse.data?.timestamp,
-            };
-          } catch (error) {
-            console.error(`Failed to read power for ${pdu.hostname}:`, error);
-            return null;
-          }
-        })
-      );
-
-      setCurrPower(readings.filter(Boolean));
-    } catch (e) {
-      console.error("Failed to fetch PDU power:", e);
-      setCurrPower([]);
-    }
-  };
-
-  const getCurrTemperature = async () => {
-    try {
-      const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/temperature/latest?site=odcdh3`
-      );
-      if (response && response.status === 200) {
-        setCurrTemperature(response.data || []);
-      }
-    } catch (e) {
-      console.error("Failed to fetch temperature:", e);
-    }
-  };
-
-  useEffect(() => {
-    const fetchCurrData = async () => {
-      getCurrPower();
-      getCurrTemperature();
-    };
-    fetchCurrData();
-    const intervalId = setInterval(fetchCurrData, 60000);
-    return () => clearInterval(intervalId);
-  }, []);
-
-  useEffect(() => {
-    const grouped: Record<string, any[]> = {};
-
-    currPower.forEach((pdu) => {
-      const rack = String(pdu.location || "").split("-")[0];
-      if (!rack) return;
-      if (!grouped[rack]) grouped[rack] = [];
-      grouped[rack].push(pdu);
-    });
-
-    // Bolt slots are index-based, so level order must not depend on fetch order.
-    Object.values(grouped).forEach((pdus) =>
-      pdus.sort((a, b) => Number(a.level ?? 0) - Number(b.level ?? 0))
-    );
-
-    setRackPDUs(grouped);
-  }, [currPower]);
-
-  useEffect(() => {
-    const temperatures: Record<string, number> = {};
-
-    currTemperature.forEach((entry) => {
-      if (!entry?.location) return;
-      temperatures[entry.location] =
-        (temperatures[entry.location] || 0) + entry.reading;
-    });
-
-    setRackTemperature(temperatures);
-  }, [currTemperature]);
 
   const colorConfig = {
     particles:    theme === "dark" ? "#FFFFFF" : "#8EC5FF",
@@ -212,6 +119,35 @@ export default function OpenDCRoom3() {
       <AnimatedCircles color={colorConfig.particles} startX={crac.x-5} startY={crac.y+crac.yheight}/>
     </g>
   );
+
+  useEffect(() => {
+    const fetch = () => {
+      axios.get(`/api/power/latest?site=odcdh3`).then(r => {
+        if (r.status !== 200) return;
+        const power = r.data || [];
+        setCurrPower(power);
+        const pdus: Record<string, any[]> = {};
+        for (const p of power) {
+          const rack = p?.location?.split("-")[0];
+          if (rack) { if (!pdus[rack]) pdus[rack] = []; pdus[rack].push(p); }
+        }
+        setRackPDUs(pdus);
+      }).catch(console.log);
+      axios.get(`/api/temperature/latest?site=odcdh3`).then(r => {
+        if (r.status !== 200) return;
+        const tempMap: Record<string, number> = {};
+        for (const item of (r.data || [])) {
+          const rack = item?.location, reading = item?.reading;
+          if (typeof rack === "string" && rack && typeof reading === "number")
+            tempMap[rack] = (tempMap[rack] ?? 0) + reading;
+        }
+        setRackTemperature(tempMap);
+      }).catch(console.log);
+    };
+    fetch();
+    const iv = setInterval(fetch, 60000);
+    return () => clearInterval(iv);
+  }, []);
 
   return (
     <>

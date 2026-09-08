@@ -37,6 +37,55 @@ def query_power_in_batches(power_model, query_filter, start_date, end_date, max_
     
     return all_results
 
+@power.route("", methods=["GET"])
+def get_power():
+    try:
+        site = request.args.get("site")
+        location = request.args.get("location")
+        timeline = request.args.get("timeline")
+        aggregate = request.args.get("aggregate")
+
+        query_filter = {}
+        if site:
+            query_filter["site"] = site
+        if location:
+            query_filter["location"] = { "$regex": location }
+        
+        power_model = Power()
+        
+        if timeline:
+            current_time = datetime.now()
+            
+            if timeline == "24h":
+                start_time = current_time - relativedelta(hours=24)
+                query_filter["created"] = {"$gte": start_time}
+                results = power_model.find(query_filter, sort=[("created", 1)])
+                
+            elif timeline == "7d":
+                start_time = current_time - relativedelta(days=7)
+                query_filter["created"] = {"$gte": start_time}
+                results = power_model.find(query_filter, sort=[("created", 1)])
+                
+            elif timeline == "1mnth":
+                start_time = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                
+                if aggregate == "true" or request.headers.get('X-Request-Type') == 'chart':
+                    return get_aggregated_power_data(power_model, query_filter, start_time, current_time, site)
+                else:
+                    results = query_power_in_batches(power_model, query_filter, start_time, current_time)
+                
+            else:
+                start_time = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                results = query_power_in_batches(power_model, query_filter, start_time, current_time)
+        else:
+            results = power_model.find(query_filter, sort=[("created", 1)])
+            
+        return results
+        
+    except Exception as e:
+        return {"status": "error", "data": str(e)}
+
+
 def get_aggregated_power_data(power_model, query_filter, start_time, end_time, site):
     """Return aggregated hourly power data for charts"""
     try:
@@ -85,6 +134,32 @@ def get_aggregated_power_data(power_model, query_filter, start_time, end_time, s
     except Exception as e:
         print(f"Error in aggregated power data: {e}")
         return {"status": "error", "data": str(e)}
+
+@power.route("latest", methods=["GET"])
+def get_latest():
+    try:
+        site = request.args.get("site")
+        location = request.args.get("location")
+        power_model = Power()
+        collection = power_model.db.db[power_model.collection_name]
+
+        match_stage = {"site": site} if site else {}
+        if location:
+            match_stage["location"] = {"$regex": location}
+        pipeline = [
+            {"$match": match_stage},
+            {"$sort": {"location": 1, "created": -1}},
+            {"$group": {"_id": "$location", "latest": {"$first": "$$ROOT"}}},
+            {"$replaceRoot": {"newRoot": "$latest"}}
+        ]
+        results = list(collection.aggregate(pipeline))
+        for doc in results:
+            if "_id" in doc:
+                doc["_id"] = str(doc["_id"])
+        return results
+    except Exception as e:
+        return {"status": "error", "data": str(e)}
+
 
 @power.route("monthly-summary", methods=["GET"])
 def get_monthly_summary():
