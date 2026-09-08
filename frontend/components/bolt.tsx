@@ -41,7 +41,7 @@ const Bolt = ({ theme, rack, power, size, x, y }: BoltProps) => {
       </TooltipTrigger>
       <TooltipContent className="dark:bg-secondary-dark dark:border-none dark:text-white bg-white border text-black">
         <p className="font-semibold">{rack}</p>
-        <p className="font-light">{power == null ? "0W" : power + "W"}</p>
+        <p className="font-light">{power == null ? "0VA" : power + "VA"}</p>
       </TooltipContent>
     </Tooltip>
   );

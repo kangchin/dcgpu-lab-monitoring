@@ -99,10 +99,29 @@ export default function OpenDCOverview() {
       const totals: Record<string,number> = {};
       await Promise.all(SITES.map(async (site) => {
         try {
-          const res = await axios.get(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/power/latest?site=${site.id}`);
-          const data = Array.isArray(res.data)?res.data:[];
-          totals[site.id] = data.reduce((sum,r)=>sum+(r.reading??0),0);
-        } catch { totals[site.id]=0; }
+          const hallKey = site.id.replace(/^odc/, "");
+          const listRes = await axios.get(
+            `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/list?site=odc&data_hall=${hallKey}`
+          );
+          const pdus = Array.isArray(listRes.data?.pdus) ? listRes.data.pdus : [];
+
+          const allReadings = await Promise.all(
+            pdus.map(async (pdu: any) => {
+              try {
+                const powerRes = await axios.get(
+                  `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/power/latest?hostname=${encodeURIComponent(pdu.hostname)}`
+                );
+                return Number(powerRes.data?.power?.reading ?? 0);
+              } catch {
+                return 0;
+              }
+            })
+          );
+
+          totals[site.id] = allReadings.reduce((sum, value) => sum + value, 0);
+        } catch {
+          totals[site.id] = 0;
+        }
       }));
       setPowerBySite(totals);
       setLastUpdate(new Date().toLocaleTimeString());
