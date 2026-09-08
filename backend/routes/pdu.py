@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import asyncio
 import os
 import re
@@ -9,7 +9,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
 from flask import Blueprint, jsonify, request
-from dateutil.relativedelta import relativedelta
 
 from routes.nmap import (
     filter_ignored_devices,
@@ -19,94 +18,10 @@ from routes.nmap import (
     scan_network_pdus,
 )
 from utils.factory.database import Database
-from utils.models.power import Power
 
 pdu = Blueprint("pdu", __name__)
 
 logger = logging.getLogger(__name__)
-
-
-def get_date_batches(start_date, end_date, max_days=7):
-    """Split a date range into batches of max_days or less."""
-    batches = []
-    current_start = start_date
-
-    while current_start < end_date:
-        current_end = min(current_start + timedelta(days=max_days), end_date)
-        batches.append((current_start, current_end))
-        current_start = current_end
-
-    return batches
-
-
-def query_power_in_batches(power_model, query_filter, start_date, end_date, max_days=7):
-    """Query power data in batches to avoid large date range errors."""
-    adjusted_end_date = end_date + timedelta(days=1)
-    batches = get_date_batches(start_date, adjusted_end_date, max_days)
-    all_results = []
-
-    for batch_start, batch_end in batches:
-        batch_filter = query_filter.copy()
-        batch_filter["created"] = {"$gte": batch_start, "$lt": batch_end}
-
-        try:
-            batch_results = power_model.find(batch_filter, sort=[("created", 1)])
-            all_results.extend(batch_results)
-        except Exception as e:
-            print(f"Error querying batch {batch_start} to {batch_end}: {e}")
-            continue
-
-    return all_results
-
-
-def get_aggregated_power_data(power_model, query_filter, start_time, end_time, site):
-    """Return aggregated hourly power data for charts."""
-    try:
-        all_readings = query_power_in_batches(power_model, query_filter, start_time, end_time, max_days=2)
-
-        hourly_data = {}
-
-        for reading in all_readings:
-            timestamp = reading.get("created")
-            if isinstance(timestamp, str):
-                timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-
-            hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
-            location = reading.get("location", "unknown")
-            power_value = reading.get("reading", 0)
-
-            key = f"{hour_key}|{location}"
-
-            if key not in hourly_data:
-                hourly_data[key] = {
-                    "created": hour_key.isoformat(),
-                    "location": location,
-                    "site": site,
-                    "readings": [],
-                    "count": 0,
-                }
-
-            hourly_data[key]["readings"].append(power_value)
-            hourly_data[key]["count"] += 1
-
-        aggregated_results = []
-        for data in hourly_data.values():
-            if data["readings"]:
-                avg_reading = sum(data["readings"]) / len(data["readings"])
-                aggregated_results.append({
-                    "created": data["created"],
-                    "location": data["location"],
-                    "site": data["site"],
-                    "reading": round(avg_reading, 2),
-                    "sample_count": data["count"],
-                })
-
-        aggregated_results.sort(key=lambda x: x["created"])
-        return aggregated_results
-
-    except Exception as e:
-        print(f"Error in aggregated power data: {e}")
-        return {"status": "error", "data": str(e)}
 
 # pysnmp>=6 dropped the old synchronous hlapi; use the current asyncio hlapi (v3arch) instead.
 try:
@@ -376,48 +291,6 @@ def extract_pdu_batch(hostnames: List[str], v2c: str = "amd123") -> List[Dict]:
     return results
 
 
-@pdu.route("/power/<hostname>/timeline", methods=["GET"])
-def get_pdu_power_timeline(hostname):
-    """Return power readings for a single PDU over a requested time window."""
-    try:
-        timeline = request.args.get("timeline")
-        aggregate = request.args.get("aggregate")
-
-        query_filter = {"pdu_hostname": hostname}
-        power_model = Power()
-
-        if timeline:
-            current_time = datetime.now()
-
-            if timeline == "24h":
-                start_time = current_time - relativedelta(hours=24)
-                query_filter["created"] = {"$gte": start_time}
-                results = power_model.find(query_filter, sort=[("created", 1)])
-
-            elif timeline == "7d":
-                start_time = current_time - relativedelta(days=7)
-                query_filter["created"] = {"$gte": start_time}
-                results = power_model.find(query_filter, sort=[("created", 1)])
-
-            elif timeline == "1mnth":
-                start_time = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-
-                if aggregate == "true" or request.headers.get("X-Request-Type") == "chart":
-                    return get_aggregated_power_data(power_model, query_filter, start_time, current_time, hostname)
-                results = query_power_in_batches(power_model, query_filter, start_time, current_time)
-
-            else:
-                start_time = current_time.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-                results = query_power_in_batches(power_model, query_filter, start_time, current_time)
-        else:
-            results = power_model.find(query_filter, sort=[("created", 1)])
-
-        return results
-
-    except Exception as e:
-        return {"status": "error", "data": str(e)}
-
-
 @pdu.route("", methods=["GET"])
 def get_pdu_info():
     """
@@ -492,158 +365,6 @@ def get_pdu_info():
         return jsonify({
             "status": "error",
             "hostname": hostname,
-            "message": str(error),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
-
-@pdu.route("/power/latest", methods=["GET"])
-def get_pdu_power_reading():
-    """
-    Read live apparent power from a PDU using the apparent_power_oid stored in the database.
-
-    Query parameters:
-    - hostname: PDU hostname or FQDN (required)
-
-    Example: GET /api/pdu/power/latest?hostname=pdu-odcdh3-b12-1.amd.com
-    """
-    hostname = request.args.get("hostname")
-
-    if not hostname:
-        return jsonify({
-            "status": "error",
-            "message": "Missing required query parameter: hostname",
-            "timestamp": datetime.now().isoformat()
-        }), 400
-
-    try:
-        collection = Database().db["pdu_test"]
-        pdu_record = collection.find_one({"hostname": hostname})
-
-        if not pdu_record:
-            return jsonify({
-                "status": "error",
-                "hostname": hostname,
-                "message": f"PDU hostname '{hostname}' not found in database",
-                "timestamp": datetime.now().isoformat()
-            }), 404
-
-        oid = str(pdu_record.get("apparent_power_oid") or "").strip()
-
-        if not oid:
-            return jsonify({
-                "status": "error",
-                "hostname": hostname,
-                "manufacturer": pdu_record.get("manufacturer", ""),
-                "message": "PDU has no apparent_power_oid stored. Run POST /api/pdu/sync-all first.",
-                "timestamp": datetime.now().isoformat()
-            }), 422
-
-        # Interactive single read, so a longer timeout than the bulk sync default.
-        raw_value = snmp_query(hostname, oid, timeout=5)
-
-        if raw_value is None:
-            return jsonify({
-                "status": "error",
-                "hostname": hostname,
-                "oid": oid,
-                "message": f"No SNMP response from '{hostname}' for OID {oid}",
-                "timestamp": datetime.now().isoformat()
-            }), 502
-
-        try:
-            reading = int(str(raw_value).strip())
-        except ValueError:
-            try:
-                reading = float(str(raw_value).strip())
-            except ValueError:
-                return jsonify({
-                    "status": "error",
-                    "hostname": hostname,
-                    "oid": oid,
-                    "message": f"Non-numeric SNMP response: {raw_value!r}",
-                    "timestamp": datetime.now().isoformat()
-                }), 502
-
-        return jsonify({
-            "status": "success",
-            "hostname": hostname,
-            "power": {
-                "reading": reading,
-                "unit": "VA",
-                "oid": oid,
-                "manufacturer": pdu_record.get("manufacturer", "")
-            },
-            "pdu_info": {
-                "ip_address": pdu_record.get("ip_address", ""),
-                "site": pdu_record.get("site", ""),
-                "data_hall": pdu_record.get("data_hall", ""),
-                "rack": pdu_record.get("rack", ""),
-                "level": pdu_record.get("level", ""),
-                "locale": pdu_record.get("locale", "")
-            },
-            "timestamp": datetime.now().isoformat()
-        }), 200
-
-    except Exception as error:
-        return jsonify({
-            "status": "error",
-            "hostname": hostname,
-            "message": str(error),
-            "timestamp": datetime.now().isoformat()
-        }), 500
-
-
-@pdu.route("/list", methods=["GET"])
-def list_pdus():
-    """
-    List PDUs filtered by infrastructure metadata parsed from their hostnames.
-
-    Query parameters (all optional, combined with AND):
-    - site, data_hall, rack, level, locale
-
-    Example: GET /api/pdu/list?site=odc&data_hall=dh3&rack=b12
-    """
-    try:
-        query = {}
-        for field in ("site", "data_hall", "rack", "level"):
-            value = request.args.get(field)
-            if value and value.strip():
-                query[field] = value.strip().lower()
-
-        locale = request.args.get("locale")
-        if locale and locale.strip():
-            query["locale"] = locale.strip()
-
-        pdus = list(
-            Database().db["pdu_test"]
-            .find(query, {
-                "_id": 0,
-                "hostname": 1,
-                "ip_address": 1,
-                "manufacturer": 1,
-                "model": 1,
-                "apparent_power_oid": 1,
-                "site": 1,
-                "data_hall": 1,
-                "rack": 1,
-                "level": 1,
-                "locale": 1,
-            })
-            .sort("hostname", 1)
-        )
-
-        return jsonify({
-            "status": "success",
-            "count": len(pdus),
-            "filter": query,
-            "pdus": pdus,
-            "timestamp": datetime.now().isoformat()
-        }), 200
-
-    except Exception as error:
-        return jsonify({
-            "status": "error",
             "message": str(error),
             "timestamp": datetime.now().isoformat()
         }), 500

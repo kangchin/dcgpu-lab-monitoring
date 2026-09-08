@@ -71,91 +71,36 @@ export default function ClientPowerRack({
     useState<DateRange>("24h");
 
   // FUNCTIONS
-  const getCurrPower = useCallback(async () => {
-    setCurrPowerLoading(true);
+  const getCurrPower = async () => {
     try {
-      let url = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/list?site=${site}&data_hall=${datahall}&rack=${rack}`;
-      if (level) {
-        url += `&level=${level}`;
-      }
-
-      const { data } = await axios.get(url);
-      const pdus = data?.pdus || [];
-
-      // Live SNMP reads are independent, so issue them together.
-      const readings = await Promise.all(
-        pdus.map(async (pduDevice: any) => {
-          try {
-            const response = await axios.get(
-              `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/power/latest?hostname=${encodeURIComponent(
-                pduDevice.hostname
-              )}`
-            );
-            return {
-              pdu_hostname: pduDevice.hostname,
-              location: [pduDevice.rack, pduDevice.level]
-                .filter(Boolean)
-                .join("-"),
-              reading: response.data?.power?.reading,
-              symbol: response.data?.power?.unit,
-              created: response.data?.timestamp,
-            };
-          } catch (error) {
-            console.error(
-              `Failed to read power for ${pduDevice.hostname}:`,
-              error
-            );
-            return null;
-          }
-        })
+      const response = await axios.get(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/power/latest?site=${site}&location=${rack}`
       );
-
-      setCurrPower(readings.filter(Boolean));
-    } catch (e) {
-      console.error("Failed to fetch PDU power:", e);
-      setCurrPower([]);
-    } finally {
+      if (response && response.status === 200) {
+        setCurrPower(response.data || []);
+      } else {
+        console.error("Failed to fetch data");
+      }
       setCurrPowerLoading(false);
+    } catch (e) {
+      console.log(e);
     }
-  }, [site, datahall, rack, level]);
+  };
 
   const getAllPower = async (dateRange: DateRange) => {
     try {
-      let listUrl = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/list?site=${site}&data_hall=${datahall}&rack=${rack}`;
-      if (level) {
-        listUrl += `&level=${level}`;
-      }
-
-      const listResponse = await axios.get(listUrl);
-      const pdus = listResponse.data?.pdus || [];
-
-      const timelineResults = await Promise.all(
-        pdus.map(async (pduDevice: any) => {
-          try {
-            const response = await axios.get(
-              `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/power/${encodeURIComponent(
-                pduDevice.hostname
-              )}/timeline?timeline=${dateRange}`
-            );
-
-            const readings = Array.isArray(response.data) ? response.data : [];
-            return readings.map((entry: any) => ({
-              ...entry,
-              location: entry.location || [pduDevice.rack, pduDevice.level].filter(Boolean).join("-"),
-            }));
-          } catch (error) {
-            console.error(`Failed to fetch power timeline for ${pduDevice.hostname}:`, error);
-            return [];
-          }
-        })
+      const response = await axios.get(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/power?site=${site}&location=${rack}&timeline=${dateRange}`
       );
-
-      const flattened = timelineResults.flat();
-      setAllPower(flattened);
+      if (response && response.status === 200) {
+        setAllPower(response.data || []);
+      } else {
+        console.error("Failed to fetch data");
+      }
       setAllPowerLoading(false);
     } catch (e) {
-      console.error("Failed to fetch PDU timeline data:", e);
-      setAllPower([]);
+      console.log(e);
+      setAllPowerLoading(false);
       setAllPowerLoading(false);
     }
   };
@@ -250,7 +195,7 @@ export default function ClientPowerRack({
     fetchCurrData();
     const intervalId = setInterval(fetchCurrData, 60000);
     return () => clearInterval(intervalId);
-  }, [selectedPowerRange, getCurrPower]);
+  }, [selectedPowerRange, setSelectedPowerRange]);
 
   useEffect(() => {
     if (allPower.length > 0) {
@@ -384,7 +329,7 @@ export default function ClientPowerRack({
       <Card className="w-full relative overflow-hidden min-h-64" delay={0.5}>
         {allPowerLoading ? (
           <div className="absolute inset-0 h-full w-full -translate-x-full animate-[shimmer_2s_infinite] overflow-hidden bg-gradient-to-r from-transparent via-slate-200/30 to-transparent dark:via-slate-200/10" />
-        ) : filteredPower.length > 0 ? (
+        ) : currPower.length > 0 ? (
           <>
             <CardHeader className="text-left">
               <div className="flex justify-between w-full items-center gap-2 text-sm">
