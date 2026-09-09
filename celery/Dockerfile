@@ -2,9 +2,9 @@ FROM python:3.10-slim-bullseye
 
 WORKDIR /app
 
-# Force HTTPS for Debian repos
-RUN sed -i 's|http://|https://|g' /etc/apt/sources.list && \
-    apt-get update && \
+# bullseye is EOL; point at the Debian archive and skip Release Valid-Until checks
+RUN sed -i 's|http://deb.debian.org|https://archive.debian.org|g; s|http://security.debian.org|https://archive.debian.org/debian-security|g' /etc/apt/sources.list && \
+    apt-get -o Acquire::Check-Valid-Until=false update && \
     apt-get install -y --no-install-recommends ipmitool && \
     rm -rf /var/lib/apt/lists/*
 
