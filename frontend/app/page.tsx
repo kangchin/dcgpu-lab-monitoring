@@ -177,10 +177,34 @@ const PowerChart = ({ site }: { site: string }) => {
   const fetchPower = async () => {
     try {
       setError(undefined);
-      const response = await axios.get(
-        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/power?site=${site}&timeline=${selectedRange}`
+      const dataHall = site.replace(/^odc/, "");
+      const listResponse = await axios.get(
+        `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/list?site=odc&data_hall=${dataHall}`
       );
-      setData(response.data || []);
+      const pdus = listResponse.data?.pdus || [];
+
+      const timelineResults = await Promise.all(
+        pdus.map(async (pdu: any) => {
+          try {
+            const response = await axios.get(
+              `${process.env.NEXT_PUBLIC_BACKEND_URL}/api/pdu/power/${encodeURIComponent(
+                pdu.hostname
+              )}/timeline?timeline=${selectedRange}`
+            );
+
+            const readings = Array.isArray(response.data) ? response.data : [];
+            return readings.map((entry: any) => ({
+              ...entry,
+              location: entry.location || [pdu.rack, pdu.level].filter(Boolean).join("-"),
+            }));
+          } catch (error) {
+            console.error(`Failed to fetch PDU timeline for ${pdu.hostname}:`, error);
+            return [];
+          }
+        })
+      );
+
+      setData(timelineResults.flat());
     } catch (e) {
       console.error(e);
       setError(`Failed to load power data for ${site.toUpperCase()}`);

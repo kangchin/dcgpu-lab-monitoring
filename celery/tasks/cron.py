@@ -21,6 +21,7 @@ import paramiko
 import time
 from datetime import datetime, timedelta
 from celery import shared_task
+from utils.factory.database import Database
 from utils.models.pdu import PDU
 from utils.models.power import Power
 from utils.models.temperature import Temperature
@@ -1400,6 +1401,100 @@ def fetch_power_data():
         except:
             pass
         raise
+
+
+@shared_task
+def fetch_pdu_power_latest():
+    """
+    Poll /api/pdu/power/latest for every PDU in `pdu_test` and store the
+    readings in `power_test`. Scheduled every 5 minutes.
+    """
+    r = None
+    lock_key = "celery:lock:fetch_pdu_power_latest"
+
+    try:
+        r = redis.Redis(
+            host=str(os.environ.get("REDIS_HOST") or "localhost"),
+            port=int(os.environ.get("REDIS_PORT") or 6379),
+            password=str(os.environ.get("REDIS_PASSWORD") or "") or None,
+            db=0,
+            decode_responses=True,
+        )
+
+        # Expire below the 5-minute beat interval so a crashed run self-heals.
+        if not r.set(lock_key, "locked", nx=True, ex=270):
+            print("⏭️  SKIPPING PDU power poll: Lock already held by another worker")
+            return "skipped_locked"
+
+        print("🔒 PDU power poll: Lock acquired")
+
+        backend_url = str(os.environ.get("BACKEND_URL") or "http://localhost:5000").rstrip("/")
+        db = Database()
+        pdu_hostnames = [
+            doc["hostname"]
+            for doc in db.db["pdu_test"].find({}, {"hostname": 1, "_id": 0})
+            if doc.get("hostname")
+        ]
+
+        print(f"Polling {len(pdu_hostnames)} PDUs from pdu_test...")
+
+        created_date = datetime.now()
+        stored = 0
+        failed = 0
+
+        for hostname in pdu_hostnames:
+            try:
+                response = requests.get(
+                    f"{backend_url}/api/pdu/power/latest",
+                    params={"hostname": hostname},
+                    timeout=15,
+                )
+
+                if response.status_code != 200:
+                    print(f"⚠️  {hostname}: HTTP {response.status_code} - {response.text[:120]}")
+                    failed += 1
+                    continue
+
+                payload = response.json()
+                power = payload.get("power") or {}
+                pdu_info = payload.get("pdu_info") or {}
+
+                db.db["power_test"].insert_one(
+                    {
+                        "hostname": hostname,
+                        "ip_address": pdu_info.get("ip_address", ""),
+                        "apparent_power_reading": power.get("reading"),
+                        "unit": power.get("unit", ""),
+                        "site": pdu_info.get("site", ""),
+                        "data_hall": pdu_info.get("data_hall", ""),
+                        "rack": pdu_info.get("rack", ""),
+                        "level": pdu_info.get("level", ""),
+                        "created_date": created_date,
+                    }
+                )
+                stored += 1
+
+            except Exception as pdu_error:
+                print(f"⚠️  {hostname}: {pdu_error}")
+                failed += 1
+
+        print(f"✅ power_test: {stored} readings stored, {failed} failed at {created_date}")
+
+        r.delete(lock_key)
+        print("🔓 PDU power poll: Lock released")
+
+        return f"success_{stored}_stored_{failed}_failed"
+
+    except Exception as e:
+        print(f"❌ Error in fetch_pdu_power_latest: {e}")
+        if r is not None:
+            try:
+                r.delete(lock_key)
+                print("🔓 Lock released due to error")
+            except Exception:
+                pass
+        raise
+
 
 @shared_task
 def fetch_temperature_data():

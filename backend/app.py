@@ -6,7 +6,6 @@ from flask_cors import CORS
 load_dotenv()
 
 from routes.conductor_system import conductor_system
-from routes.power import power
 from routes.temperature import temperature
 from routes.dashboard import dashboard
 from routes.monthly_data import monthly_data
@@ -45,7 +44,6 @@ app.config.update(
 
 app.register_blueprint(conductor_system, url_prefix="/api/conductor/system")
 app.register_blueprint(system_temperature, url_prefix="/api/system-temperature")
-app.register_blueprint(power, url_prefix="/api/power")
 app.register_blueprint(temperature, url_prefix="/api/temperature")
 app.register_blueprint(dashboard, url_prefix="/api/dashboard")
 app.register_blueprint(monthly_data, url_prefix="/api/monthly-power-data")
@@ -148,29 +146,17 @@ def openapi_spec():
                     "responses": {"200": {"description": "Total power for site"}}
                 }
             },
-            "/api/power": {
+            "/api/pdu/power/{hostname}/timeline": {
                 "get": {
-                    "summary": "Get Power Data",
-                    "description": "Query power consumption data with optional filtering and timeline",
-                    "tags": ["Power"],
+                    "summary": "Get PDU Power Timeline by Hostname",
+                    "description": "Return power readings for a specific PDU over a selected time window.",
+                    "tags": ["PDU"],
                     "parameters": [
-                        {"name": "site", "in": "query", "schema": {"type": "string", "example": "odcdh1"}, "description": "Site filter (e.g., odcdh1, odcdh2, odcdh3, odcdh4, odcdh5)"},
-                        {"name": "location", "in": "query", "schema": {"type": "string", "example": "rack-1"}, "description": "Location regex filter (e.g., rack-1, row-a, dh3)"},
+                        {"name": "hostname", "in": "path", "required": True, "schema": {"type": "string", "example": "pdu-odcdh3-b12-1.amd.com"}, "description": "PDU hostname or FQDN"},
                         {"name": "timeline", "in": "query", "schema": {"type": "string", "enum": ["24h", "7d", "1mnth"], "example": "24h"}, "description": "Time range (available: 24h, 7d, 1mnth)"},
                         {"name": "aggregate", "in": "query", "schema": {"type": "string", "example": "hourly"}, "description": "Aggregate data (for charts) - e.g., hourly, daily, weekly"}
                     ],
-                    "responses": {"200": {"description": "Power readings array"}}
-                }
-            },
-            "/api/power/latest": {
-                "get": {
-                    "summary": "Get Latest Power Reading",
-                    "description": "Get most recent power reading per location",
-                    "tags": ["Power"],
-                    "parameters": [
-                        {"name": "site", "in": "query", "schema": {"type": "string", "example": "odcdh1"}, "description": "Site filter (e.g., odcdh1, odcdh2)"}
-                    ],
-                    "responses": {"200": {"description": "Latest power reading"}}
+                    "responses": {"200": {"description": "PDU power timeline array"}}
                 }
             },
             "/api/power/monthly-summary": {
@@ -573,6 +559,102 @@ def openapi_spec():
                         "400": {"description": "Missing hostname query parameter"},
                         "404": {"description": "PDU hostname not found in database"},
                         "500": {"description": "PDU retrieval error"}
+                    }
+                }
+            },
+            "/api/pdu/list": {
+                "get": {
+                    "summary": "List PDUs by Site / Data Hall / Rack / Level",
+                    "description": "List PDU devices from the pdu_test collection filtered by infrastructure metadata parsed from their hostnames. All filters are optional and combined with AND.",
+                    "tags": ["PDU"],
+                    "parameters": [
+                        {"name": "site", "in": "query", "required": False, "schema": {"type": "string"}, "description": "Site code", "example": "odc"},
+                        {"name": "data_hall", "in": "query", "required": False, "schema": {"type": "string"}, "description": "Data hall", "example": "dh3"},
+                        {"name": "rack", "in": "query", "required": False, "schema": {"type": "string"}, "description": "Rack ID", "example": "b12"},
+                        {"name": "level", "in": "query", "required": False, "schema": {"type": "string"}, "description": "Level", "example": "1"},
+                        {"name": "locale", "in": "query", "required": False, "schema": {"type": "string"}, "description": "Locale", "example": "Penang"}
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Filtered list of PDUs",
+                            "content": {
+                                "application/json": {
+                                    "example": {
+                                        "status": "success",
+                                        "count": 2,
+                                        "filter": {"site": "odc", "data_hall": "dh3", "rack": "b12"},
+                                        "pdus": [
+                                            {
+                                                "hostname": "pdu-odcdh3-b12-1.amd.com",
+                                                "ip_address": "10.145.68.79",
+                                                "manufacturer": "Tripp Lite",
+                                                "model": "PDU3XEVSR6G32A",
+                                                "apparent_power_oid": "1.3.6.1.4.1.850.1.1.3.2.2.1.1.9.1",
+                                                "site": "odc",
+                                                "data_hall": "dh3",
+                                                "rack": "b12",
+                                                "level": "1",
+                                                "locale": "Penang"
+                                            }
+                                        ],
+                                        "timestamp": "2026-09-04T10:12:33.482910"
+                                    }
+                                }
+                            }
+                        },
+                        "500": {"description": "PDU list retrieval error"}
+                    }
+                }
+            },
+            "/api/pdu/power/latest": {
+                "get": {
+                    "summary": "Read Live PDU Power",
+                    "description": "Query a PDU over SNMP for its current apparent power using the apparent_power_oid stored in the database for that hostname. The OID is resolved per manufacturer (Tripp Lite, Enlogic, Raritan) during sync.",
+                    "tags": ["PDU"],
+                    "parameters": [
+                        {
+                            "name": "hostname",
+                            "in": "query",
+                            "required": True,
+                            "schema": {
+                                "type": "string"
+                            },
+                            "description": "PDU hostname or FQDN",
+                            "example": "pdu-odcdh3-b04-2.amd.com"
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Live power reading retrieved from the PDU",
+                            "content": {
+                                "application/json": {
+                                    "example": {
+                                        "status": "success",
+                                        "hostname": "pdu-odcdh3-b04-2.amd.com",
+                                        "power": {
+                                            "reading": 3926,
+                                            "unit": "VA",
+                                            "oid": "1.3.6.1.4.1.850.1.1.3.2.2.1.1.9.1",
+                                            "manufacturer": "Tripp Lite"
+                                        },
+                                        "pdu_info": {
+                                            "ip_address": "10.145.68.79",
+                                            "site": "odc",
+                                            "data_hall": "dh3",
+                                            "rack": "b04",
+                                            "level": "2",
+                                            "locale": "Penang"
+                                        },
+                                        "timestamp": "2026-09-04T10:12:33.482910"
+                                    }
+                                }
+                            }
+                        },
+                        "400": {"description": "Missing hostname query parameter"},
+                        "404": {"description": "PDU hostname not found in database"},
+                        "422": {"description": "PDU has no apparent_power_oid stored; run POST /api/pdu/sync-all first"},
+                        "502": {"description": "PDU did not respond over SNMP, or returned a non-numeric value"},
+                        "500": {"description": "Power reading error"}
                     }
                 }
             },

@@ -60,6 +60,10 @@ const OpenDCDH2: React.FC<RoomVisualizerProps> = ({ theme, powerData, temperatur
         tempRackPDUs[rack].push(pduData);
       }
     }
+    // Bolt slots are index-based, so level order must not depend on fetch order.
+    Object.values(tempRackPDUs).forEach((pdus) =>
+      pdus.sort((a, b) => Number(a.level ?? 0) - Number(b.level ?? 0))
+    );
     setRackPower(tempRackPower);
     setRackPDUs(tempRackPDUs);
   }, [powerData]);
