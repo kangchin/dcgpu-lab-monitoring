@@ -49,9 +49,14 @@ app.conf.update(
 
 # Updated beat schedule with more frequent system temperature checks
 app.conf.beat_schedule = {
-    "fetch_power": {
-        "task": "tasks.cron.fetch_power_data",
-        "schedule": timedelta(minutes=10),
+    # Temporarily disabled: stops writes to the legacy "power" collection.
+    # "fetch_power": {
+    #     "task": "tasks.cron.fetch_power_data",
+    #     "schedule": timedelta(minutes=10),
+    # },
+    "fetch_pdu_power_latest": {
+        "task": "tasks.cron.fetch_pdu_power_latest",
+        "schedule": timedelta(minutes=5),
     },
     "fetch_temperature": {
         "task": "tasks.cron.fetch_temperature_data",
@@ -66,8 +71,8 @@ app.conf.beat_schedule = {
         "task": "tasks.cron.fetch_system_fan_speed_data",
         "schedule": timedelta(minutes=15),  # Run every 15 minutes to reduce the amount of data
     },
-    "sync_conductor_systems": {
-    "task": "tasks.cron.sync_conductor_systems",
-    "schedule": timedelta(minutes=30),
-    },
+    # "sync_conductor_systems": {
+    # "task": "tasks.cron.sync_conductor_systems",
+    # "schedule": timedelta(minutes=30),
+    # },
 }
